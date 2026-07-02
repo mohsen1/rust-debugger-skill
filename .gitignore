@@ -13,3 +13,4 @@ docs/rl-directions.md
 benchmarks/rlenv/episodes/
 benchmarks/rlenv/.mcp-*.json
 benchmarks/rlenv/PROOF.md
+benchmarks/rlenv/dataset.jsonl
