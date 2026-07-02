@@ -57,16 +57,19 @@ does not support, verified against the real adapter.
 
 ## Install
 
-```bash
-pip install rustdbg          # provides `rdbg` and `rustdbg-mcp`
-```
-
-or run from a clone with no install:
+Straight from the repo (works today):
 
 ```bash
-git clone https://github.com/mohsen1/rustdbg && cd rustdbg
-python3 -m rustdbg.cli --help     # (with src/ on PYTHONPATH) — see below
+pip install "git+https://github.com/mohsen1/rustdbg"     # provides rdbg + rustdbg-mcp
 ```
+
+Once published to PyPI:
+
+```bash
+pip install rustdbg
+```
+
+Or run from a clone with no install: `PYTHONPATH=src python3 -m rustdbg.cli --help`.
 
 ## Use it as an MCP server
 
