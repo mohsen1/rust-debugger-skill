@@ -1,0 +1,54 @@
+[
+  {
+    "case": "8c13977ef8",
+    "bug": "The TS2559/TS2560 weak-type diagnostic ('has no ",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 113.7,
+    "error": null,
+    "tokens": 536504,
+    "cost": 0.42097680000000004,
+    "turns": 11
+  },
+  {
+    "case": "8c13977ef8",
+    "bug": "The TS2559/TS2560 weak-type diagnostic ('has no ",
+    "agent": "claude",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 122.8,
+    "error": null,
+    "tokens": 869850,
+    "cost": 0.5743556999999999,
+    "turns": 17
+  },
+  {
+    "case": "c6f258fba0",
+    "bug": "For a failing union source (e.g. 'number | undef",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 192.5,
+    "error": null,
+    "tokens": 1336036,
+    "cost": 0.7363989,
+    "turns": 25
+  },
+  {
+    "case": "c6f258fba0",
+    "bug": "For a failing union source (e.g. 'number | undef",
+    "agent": "claude",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 114.0,
+    "error": null,
+    "tokens": 1029203,
+    "cost": 0.6080418,
+    "turns": 20
+  }
+]

@@ -30,6 +30,12 @@ WT = Path.home() / "code" / "tsz-bench"
 ROOT = Path(__file__).resolve().parent
 SKILL = ROOT.parent / "skill" / "rust-debugger" / "SKILL.md"
 RESULTS = ROOT / "results-repo"
+TRANSCRIPTS = RESULTS / "transcripts"
+# Builds go into a fixed-size disk image, so a broad `cargo build` on the
+# ~1.7M-line workspace fails inside the image instead of filling the main disk.
+# Set up with: hdiutil create -size 45g -type SPARSE -fs APFS -volname tsztgt
+#              /tmp/tsztgt.sparseimage ; hdiutil attach /tmp/tsztgt.sparseimage
+TARGET_DIR = "/Volumes/tsztgt/target"
 
 BASE_PROMPT = """A regression test in this repository fails:
 
@@ -43,10 +49,20 @@ large: only ever run the one narrowed test command above, never the full suite."
 RDBG_NOTE = """
 
 You also have `rdbg`, a Rust debugger for this project (run `rdbg` for usage).
-When a value or emitted diagnostic is wrong, prefer breaking on the failing test
-and reading runtime state — `rdbg launch --cargo . --test <suite> --break
-<file>:<line> -- <test_name>`, then `vars` / `eval <path>` / `bt` — instead of
-adding prints and rebuilding."""
+Every tsz diagnostic funnels through one sink — `push_diagnostic` — so for a
+wrong / extra / missing diagnostic ("fingerprint") mismatch, TRACE it at runtime
+instead of grepping:
+
+  rdbg launch --cargo . --test <suite> --break-fn push_diagnostic -- <test_name>
+  rdbg eval diag.code          # the code being emitted; not the one you want?
+  rdbg continue ; rdbg eval diag.code   # …continue until it is
+  rdbg bt                      # walks back to the exact decision that emitted it
+  rdbg frame <n> ; rdbg vars   # at that frame, inspect the types/flags that produced it
+
+For an EXTRA (false-positive) diagnostic the backtrace shows what decided to emit
+it; for a WRONG value, inspect the source/target type being formatted; for a
+MISSING one, break where the check should fire and see why its condition is false.
+Prefer this over adding prints and rebuilding."""
 
 
 def sh(args, timeout=None):
@@ -72,23 +88,69 @@ def install_rdbg():
     shutil.copy(SKILL, d / "SKILL.md")
 
 
-def run_claude(prompt):
-    p = subprocess.run(["claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"],
-                       cwd=WT, capture_output=True, text=True, timeout=2700)
+import threading
+
+MIN_FREE_GB = 15  # kill a session if free disk drops below this (a runaway build)
+
+
+def _run_watched(cmd, timeout=2700):
+    """Run a subprocess with a disk watchdog: if free space on WT's volume drops
+    below MIN_FREE_GB, kill the process tree (a thrashing agent that ran a broad
+    `cargo build` on the ~1.7M-line workspace can fill the disk in one session)."""
+    proc = subprocess.Popen(cmd, cwd=WT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    killed = {"disk": False}
+
+    def watch():
+        while proc.poll() is None:
+            if shutil.disk_usage(WT).free / 1e9 < MIN_FREE_GB:
+                killed["disk"] = True
+                subprocess.run(["pkill", "-9", "-f", "cargo"], capture_output=True)
+                subprocess.run(["pkill", "-9", "-f", "rustc"], capture_output=True)
+                proc.kill()
+                return
+            time.sleep(5)
+
+    t = threading.Thread(target=watch, daemon=True)
+    t.start()
     try:
-        data = json.loads(p.stdout)
-    except json.JSONDecodeError:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+    return out, killed["disk"]
+
+
+def run_claude(prompt, tpath):
+    out, disk_killed = _run_watched(
+        ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"])
+    TRANSCRIPTS.mkdir(exist_ok=True)
+    tpath.write_text(out)  # full JSONL transcript: every assistant / tool_use / tool_result event
+    if disk_killed:
+        return {"tokens": None, "cost": None, "turns": None, "disk_killed": True}
+    result = None
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("type") == "result":
+            result = ev
+    if not result:
         return {"tokens": None, "cost": None, "turns": None}
-    u = data.get("usage", {})
+    u = result.get("usage", {})
     tokens = sum(v for k, v in u.items() if k.endswith("_tokens") and isinstance(v, int))
-    return {"tokens": tokens, "cost": data.get("total_cost_usd"), "turns": data.get("num_turns")}
+    return {"tokens": tokens, "cost": result.get("total_cost_usd"), "turns": result.get("num_turns")}
 
 
-def run_codex(prompt):
-    p = subprocess.run(["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", prompt],
-                       cwd=WT, capture_output=True, text=True, timeout=2700)
+def run_codex(prompt, tpath):
+    out, disk_killed = _run_watched(
+        ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", prompt])
+    TRANSCRIPTS.mkdir(exist_ok=True)
+    tpath.write_text(out)
+    if disk_killed:
+        return {"tokens": None, "cost": None, "turns": None, "disk_killed": True}
     tokens = None
-    for line in p.stdout.splitlines():
+    for line in out.splitlines():
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
@@ -112,10 +174,11 @@ def one_run(case, agent, cond):
         install_rdbg()
         prompt += RDBG_NOTE
     os.environ["PATH"] = f"{Path.home()}/.local/bin:" + os.environ["PATH"]
+    tpath = TRANSCRIPTS / f"{case['sha'][:10]}-{cond}.jsonl"
     start = time.monotonic()
     try:
-        info = AGENTS[agent](prompt)
-        err = None
+        info = AGENTS[agent](prompt, tpath)
+        err = "disk-killed" if info.pop("disk_killed", False) else None
     except subprocess.TimeoutExpired:
         info, err = {"tokens": None, "cost": None, "turns": None}, "timeout"
     wall = time.monotonic() - start
@@ -159,17 +222,36 @@ def main():
         cases = cases[: a.cases]
     if not WT.exists():
         raise SystemExit(f"worktree {WT} missing — see the module docstring")
+    if not Path(TARGET_DIR).parent.exists():
+        raise SystemExit(f"capped target volume {TARGET_DIR} not mounted — see the module docstring")
+    # every cargo build (agent's and verify's) goes into the capped image
+    os.environ["CARGO_TARGET_DIR"] = TARGET_DIR
 
-    rows = []
+    # resume: keep whatever already completed, skip those (case, cond) pairs
+    existing = []
+    if (RESULTS / "runs.json").exists():
+        try:
+            existing = json.loads((RESULTS / "runs.json").read_text())
+        except json.JSONDecodeError:
+            existing = []
+    done = {(r["case"], r["cond"]) for r in existing}
+    rows = list(existing)
+    conds = a.conditions.split(",")
     for case in cases:
+        if all((case["sha"][:10], c) in done for c in conds):
+            continue
+        # fresh capped-target budget per case (both conditions share one commit's build)
+        subprocess.run(["rm", "-rf", TARGET_DIR], capture_output=True)
         for agent in a.agents.split(","):
             if not shutil.which(agent):
                 continue
-            for cond in a.conditions.split(","):
+            for cond in conds:
+                if (case["sha"][:10], cond) in done:
+                    continue
                 print(f"running {case['sha'][:10]} / {agent} / {cond} …", flush=True)
                 row = one_run(case, agent, cond)
                 print(f"  -> red={row['baseline_red']} passed={row['passed']} "
-                      f"wall={row['wall_s']}s tokens={row['tokens']}", flush=True)
+                      f"wall={row['wall_s']}s tokens={row['tokens']} {row.get('error') or ''}", flush=True)
                 rows.append(row)
                 (RESULTS / "runs.json").write_text(json.dumps(rows, indent=2))
     # restore worktree

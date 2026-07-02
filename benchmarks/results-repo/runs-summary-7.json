@@ -1,0 +1,93 @@
+[
+  {
+    "case": "8c13977ef8",
+    "bug": "The TS2559/TS2560 weak-type diagnostic ('has no ",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 158.8,
+    "error": null,
+    "tokens": 517083,
+    "cost": 1.328934,
+    "turns": 13
+  },
+  {
+    "case": "8c13977ef8",
+    "bug": "The TS2559/TS2560 weak-type diagnostic ('has no ",
+    "agent": "claude",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 495.9,
+    "error": null,
+    "tokens": 2472110,
+    "cost": 4.710807000000001,
+    "turns": 39
+  },
+  {
+    "case": "c6f258fba0",
+    "bug": "For a failing union source (e.g. 'number | undef",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 141.3,
+    "error": null,
+    "tokens": 439245,
+    "cost": 1.219871,
+    "turns": 12
+  },
+  {
+    "case": "c6f258fba0",
+    "bug": "For a failing union source (e.g. 'number | undef",
+    "agent": "claude",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 101.2,
+    "error": null,
+    "tokens": 366316,
+    "cost": 1.153955,
+    "turns": 10
+  },
+  {
+    "case": "da2f05e5be",
+    "bug": "A type alias whose body is a template-literal (`",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 331.5,
+    "error": null,
+    "tokens": 1542072,
+    "cost": 3.4661840000000006,
+    "turns": 27
+  },
+  {
+    "case": "da2f05e5be",
+    "bug": "A type alias whose body is a template-literal (`",
+    "agent": "claude",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 158.4,
+    "error": null,
+    "tokens": 661981,
+    "cost": 1.6509909999999999,
+    "turns": 17
+  },
+  {
+    "case": "b483d46cf7",
+    "bug": "Under exactOptionalPropertyTypes, TS2375 on the ",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": false,
+    "wall_s": 775.4,
+    "error": null,
+    "tokens": 4191893,
+    "cost": 2.0928741,
+    "turns": 58
+  }
+]

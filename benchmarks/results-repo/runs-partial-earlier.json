@@ -1,0 +1,67 @@
+[
+  {
+    "case": "8c13977ef8",
+    "bug": "The TS2559/TS2560 weak-type diagnostic ('has no ",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 683.7,
+    "error": null,
+    "tokens": 2969896,
+    "cost": 5.529522000000001,
+    "turns": 49
+  },
+  {
+    "case": "8c13977ef8",
+    "bug": "The TS2559/TS2560 weak-type diagnostic ('has no ",
+    "agent": "claude",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 111.3,
+    "error": null,
+    "tokens": 341416,
+    "cost": 1.06496,
+    "turns": 9
+  },
+  {
+    "case": "c6f258fba0",
+    "bug": "For a failing union source (e.g. 'number | undef",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 248.6,
+    "error": null,
+    "tokens": 1255758,
+    "cost": 2.534885,
+    "turns": 23
+  },
+  {
+    "case": "c6f258fba0",
+    "bug": "For a failing union source (e.g. 'number | undef",
+    "agent": "claude",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": false,
+    "wall_s": 165.4,
+    "error": null,
+    "tokens": 740635,
+    "cost": 1.651086,
+    "turns": 19
+  },
+  {
+    "case": "da2f05e5be",
+    "bug": "A type alias whose body is a template-literal (`",
+    "agent": "claude",
+    "cond": "without",
+    "baseline_red": true,
+    "passed": true,
+    "wall_s": 236.9,
+    "error": null,
+    "tokens": 665694,
+    "cost": 1.6842469999999998,
+    "turns": 19
+  }
+]
