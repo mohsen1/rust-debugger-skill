@@ -12,12 +12,16 @@ pub const USAGE: &str = "\
 rdbg — IDE-grade Rust debugging for agents (rust-analyzer + lldb-dap)
 
 LAUNCH
-  rdbg launch --cargo <dir> [--bin <t>|--test <t>] --break f.rs:L [...] [-- ARGS]
+  rdbg launch --cargo <dir> [--bin <t>|--test <t>|--lib] --break f.rs:L [...] [-- ARGS]
+    --bin <t>   a binary target        --test <t>  an integration test (tests/<t>.rs)
+    --lib       the library's own unit tests (#[cfg(test)] mod tests) — pass the
+                test name after --,  e.g.  --lib --break src/lib.rs:42 -- my_test
   rdbg launch --bin-path <path> --break f.rs:L [...]      (skip the build)
     at launch you may also pass  --break-fn <name>  --panic
 
 TRACE (one call instead of break→inspect→continue×N)
   rdbg trace --cargo . --bin app --break f.rs:L --capture i,sum --max 30 -- ARGS
+  rdbg trace --cargo . --lib --break src/lib.rs:42 --capture a,b -- my_test
     runs through every hit, captures the paths at each, returns a table
 
 BREAKPOINTS (set or change any time, even while paused)
@@ -109,40 +113,123 @@ pub fn ensure_daemon(ws: &Path) {
     }
 }
 
-pub fn cargo_build(dir: &Path, bin: Option<&str>, test: Option<&str>) -> PathBuf {
+/// Build one cargo target and return its executable. `bin` → a `--bin` target,
+/// `test` → a `tests/<name>.rs` integration test, `lib` → the library's own
+/// unit-test binary (inline `#[cfg(test)] mod tests`). Returns an error string
+/// instead of exiting — the MCP server calls this too.
+pub fn cargo_build(dir: &Path, bin: Option<&str>, test: Option<&str>, lib: bool) -> Result<PathBuf, String> {
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(dir).arg(if test.is_some() { "test" } else { "build" }).arg("--message-format=json");
-    if let Some(t) = test {
-        cmd.arg("--no-run");
-        if t == "lib" {
-            cmd.arg("--lib");
-        } else {
-            cmd.args(["--test", t]);
-        }
+    cmd.current_dir(dir);
+    if lib || test.is_some() {
+        cmd.args(["test", "--no-run"]);
+    } else {
+        cmd.arg("build");
+    }
+    cmd.arg("--message-format=json");
+    if lib {
+        cmd.arg("--lib");
+    } else if let Some(t) = test {
+        cmd.args(["--test", t]);
     }
     if let Some(b) = bin {
         cmd.args(["--bin", b]);
     }
     eprintln!("building …");
-    let out = cmd.output().expect("run cargo");
-    let mut exe: Option<PathBuf> = None;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(m): Result<Value, _> = serde_json::from_str(line) else { continue };
-        if m["reason"] == "compiler-artifact" {
-            if let Some(e) = m["executable"].as_str() {
-                let name = m["target"]["name"].as_str().unwrap_or("");
-                if (bin == Some(name)) || (test == Some(name)) || (test == Some("lib")) {
-                    exe = Some(PathBuf::from(e));
-                } else if exe.is_none() {
-                    exe = Some(PathBuf::from(e));
+    let out = cmd.output().map_err(|e| format!("could not run cargo in {}: {e}", dir.display()))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() {
+        // surface the rendered compiler diagnostics (JSON message format sends
+        // them to stdout), then cargo's own stderr (target-selection errors etc.)
+        let mut msg = String::new();
+        for line in stdout.lines() {
+            let Ok(m): Result<Value, _> = serde_json::from_str(line) else { continue };
+            if m["reason"] == "compiler-message" {
+                if let Some(r) = m["message"]["rendered"].as_str() {
+                    msg.push_str(r);
                 }
             }
         }
+        msg.push_str(String::from_utf8_lossy(&out.stderr).trim_end());
+        return Err(msg);
     }
-    exe.unwrap_or_else(|| {
-        eprintln!("{}", String::from_utf8_lossy(&out.stderr));
-        std::process::exit(2);
-    })
+    pick_artifact(&stdout, bin, test, lib).ok_or_else(|| format!(
+        "cargo built nothing debuggable in {} — pick a target: --bin <name>, --test <name> (tests/<name>.rs), or --lib (the library's #[cfg(test)] unit tests)",
+        dir.display()))
+}
+
+/// Pick the executable out of cargo's `--message-format=json` output: the named
+/// `--bin`/`--test` target, the library's unit-test binary in lib mode, or the
+/// last executable produced. Build scripts are never candidates.
+fn pick_artifact(json_lines: &str, bin: Option<&str>, test: Option<&str>, lib: bool) -> Option<PathBuf> {
+    let mut exe: Option<PathBuf> = None;
+    for line in json_lines.lines() {
+        let Ok(m): Result<Value, _> = serde_json::from_str(line) else { continue };
+        if m["reason"] != "compiler-artifact" {
+            continue;
+        }
+        let Some(e) = m["executable"].as_str() else { continue };
+        let kinds = m["target"]["kind"].as_array().cloned().unwrap_or_default();
+        if kinds.iter().any(|k| k == "custom-build") {
+            continue;
+        }
+        let name = m["target"]["name"].as_str().unwrap_or("");
+        let is_lib_test = m["profile"]["test"].as_bool().unwrap_or(false)
+            && kinds.iter().any(|k| k.as_str().is_some_and(|s| s.ends_with("lib")));
+        let matched = if lib { is_lib_test } else { bin == Some(name) || test == Some(name) };
+        if matched {
+            exe = Some(PathBuf::from(e));
+        } else if exe.is_none() {
+            exe = Some(PathBuf::from(e));
+        }
+    }
+    exe
+}
+
+/// Resolve `--bin`/`--test`/`--lib` to a built executable, forgivingly: when
+/// `--test <X>` names no integration-test target (no `tests/<X>.rs`) but the
+/// library's unit-test binary has a `#[test]` matching `X` — the common inline
+/// `#[cfg(test)] mod tests` case — fall back to that binary with `X` as the
+/// test filter. `args` are the program's args (the test-name filter); the
+/// fallback inserts `X` if it is missing. Errors say the correct invocation.
+pub fn build_target(dir: &Path, bin: Option<&str>, test: Option<&str>, lib: bool,
+                    args: &mut Vec<String>) -> Result<PathBuf, String> {
+    let lib = lib || test == Some("lib"); // `--test lib` has always meant the lib unit tests
+    let test = if lib { None } else { test };
+    let Some(t) = test else { return cargo_build(dir, bin, None, lib) };
+    match cargo_build(dir, bin, Some(t), false) {
+        Err(e) if e.contains("no test target named") => {
+            let fallback = cargo_build(dir, None, None, true);
+            if let Ok(exe) = &fallback {
+                if lists_test(exe, t) {
+                    eprintln!("note: '{t}' is not an integration test target (no tests/{t}.rs); \
+                               treating it as a --lib unit-test filter");
+                    if !args.iter().any(|a| a == t) {
+                        args.insert(0, t.to_string());
+                    }
+                    return Ok(exe.clone());
+                }
+            }
+            let detail = match &fallback {
+                Ok(_) => format!("and the library's unit tests have no #[test] matching '{t}'"),
+                Err(_) => "and the package has no library unit-test binary".to_string(),
+            };
+            Err(format!(
+                "no integration test target '{t}' — tests/{t}.rs does not exist, {detail}.\n\
+                 --test <name> targets integration tests (tests/<name>.rs). For a #[test] function\n\
+                 inside the library, use --lib with the test name after --:\n  \
+                 rdbg launch --cargo <dir> --lib --break <file>:<line> -- {t}\n\
+                 (MCP debug_launch/debug_trace: pass lib:true and the test name in args)"))
+        }
+        other => other,
+    }
+}
+
+/// Does this libtest binary have a test matching `filter`? (`<bin> <filter> --list`
+/// prints `path::to::test: test` lines without running anything.)
+fn lists_test(exe: &Path, filter: &str) -> bool {
+    Command::new(exe).args([filter, "--list"]).output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim_end().ends_with(": test")))
+        .unwrap_or(false)
 }
 
 fn parse_bp(spec: &str, base: &Path) -> (String, i64) {
@@ -467,7 +554,16 @@ fn fmt_field(resp: Option<Value>, field: &str) -> String {
 }
 
 fn do_launch(ws: &Path, rest: &[String], trace_mode: bool) -> i32 {
+    let verb = if trace_mode { "trace" } else { "launch" };
+    let usage = format!(
+        "usage: rdbg {verb} --cargo <dir> [--bin <name> | --test <name> | --lib] --break <file.rs:line> \
+         [--break-fn <fn>] [--panic]{} [-- <program args / test-name filter>]\n       \
+         rdbg {verb} --bin-path <path> --break <file.rs:line>\n  \
+         --bin <name>   a binary target        --test <name>  an integration test (tests/<name>.rs)\n  \
+         --lib          the library's own unit tests (#[cfg(test)] mod tests); pass the test name after --",
+        if trace_mode { " [--capture a,b] [--max N]" } else { "" });
     let (mut cargo, mut bin_path, mut bin, mut test): (Option<String>, Option<String>, Option<String>, Option<String>) = (None, None, None, None);
+    let mut lib = false;
     let mut breaks: Vec<String> = vec![];
     let mut fn_breaks: Vec<String> = vec![];
     let mut args: Vec<String> = vec![];
@@ -481,25 +577,40 @@ fn do_launch(ws: &Path, rest: &[String], trace_mode: bool) -> i32 {
             "--bin-path" => { bin_path = rest.get(i + 1).cloned(); i += 2; }
             "--bin" => { bin = rest.get(i + 1).cloned(); i += 2; }
             "--test" => { test = rest.get(i + 1).cloned(); i += 2; }
+            "--lib" => { lib = true; i += 1; }
             "--break" => { if let Some(b) = rest.get(i + 1) { breaks.push(b.clone()); } i += 2; }
             "--break-fn" => { if let Some(b) = rest.get(i + 1) { fn_breaks.push(b.clone()); } i += 2; }
             "--capture" => { if let Some(c) = rest.get(i + 1) { captures.extend(c.split(',').map(|s| s.trim().to_string())); } i += 2; }
             "--max" => { max = rest.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(50); i += 2; }
             "--panic" => { panic = true; i += 1; }
             "--" => { args = rest[i + 1..].to_vec(); break; }
-            other => { eprintln!("unknown launch arg {other:?}"); return 2; }
+            other => { eprintln!("error: unknown {verb} arg {other:?}\n{usage}"); return 2; }
         }
     }
+    if [bin.is_some(), test.is_some(), lib].iter().filter(|b| **b).count() > 1 {
+        eprintln!("error: pick one target — --bin <name>, --test <name> (tests/<name>.rs), or --lib (the library's #[cfg(test)] unit tests)");
+        return 2;
+    }
     if breaks.is_empty() && fn_breaks.is_empty() && !panic {
-        eprintln!("launch needs at least one --break / --break-fn / --panic");
+        eprintln!("error: {verb} needs at least one --break <file.rs:line>, --break-fn <name>, or --panic\n  \
+                   e.g.  rdbg {verb} --cargo . --lib --break src/lib.rs:42 -- my_test");
         return 2;
     }
     let program: PathBuf = if let Some(c) = cargo {
-        cargo_build(&PathBuf::from(&c), bin.as_deref(), test.as_deref())
+        match build_target(&PathBuf::from(&c), bin.as_deref(), test.as_deref(), lib, &mut args) {
+            Ok(p) => p,
+            Err(e) => { eprintln!("error: {e}"); return 2; }
+        }
     } else if let Some(bp) = bin_path {
-        PathBuf::from(bp).canonicalize().unwrap_or_else(|_| PathBuf::from("missing"))
+        match PathBuf::from(&bp).canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("error: --bin-path {bp:?} does not exist — build it first, or use --cargo <dir> to build and debug in one step");
+                return 2;
+            }
+        }
     } else {
-        eprintln!("launch needs --cargo <dir> or --bin-path <path>");
+        eprintln!("error: {verb} needs --cargo <dir> (build then debug) or --bin-path <path> (a prebuilt binary)\n{usage}");
         return 2;
     };
     let cwd = std::env::current_dir().unwrap();
@@ -523,10 +634,50 @@ fn do_launch(ws: &Path, rest: &[String], trace_mode: bool) -> i32 {
                     if let Some(o) = tv["output"].as_str() { if !o.is_empty() { println!("--- output ---\n{}", o.trim_end()); } }
                     0
                 }
-                _ => { eprintln!("trace failed"); 1 }
+                Some(tv) => { eprintln!("trace failed: {}", tv["error"].as_str().unwrap_or("unknown")); 1 }
+                None => { eprintln!("trace failed: the rdbg daemon did not respond"); 1 }
             }
         }
         Some(v) => { eprintln!("launch failed: {}", v["error"].as_str().unwrap_or("unknown")); 1 }
         None => { eprintln!("launch failed: daemon did not respond"); 1 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_artifact;
+
+    fn artifact(name: &str, kind: &str, test: bool, exe: &str) -> String {
+        format!(r#"{{"reason":"compiler-artifact","target":{{"name":"{name}","kind":["{kind}"]}},"profile":{{"test":{test}}},"executable":"{exe}"}}"#)
+    }
+
+    #[test]
+    fn lib_mode_picks_the_lib_unittest_binary() {
+        let lines = [
+            artifact("build-script-build", "custom-build", false, "/t/build/bs"),
+            r#"{"reason":"compiler-artifact","target":{"name":"serde","kind":["lib"]},"profile":{"test":false},"executable":null}"#.to_string(),
+            artifact("rpncalc", "lib", true, "/t/debug/deps/rpncalc-abc"),
+        ].join("\n");
+        assert_eq!(pick_artifact(&lines, None, None, true).unwrap().to_string_lossy(), "/t/debug/deps/rpncalc-abc");
+    }
+
+    #[test]
+    fn named_bin_and_test_targets_win_over_others() {
+        let lines = [
+            artifact("other", "bin", false, "/t/debug/other"),
+            artifact("app", "bin", false, "/t/debug/app"),
+        ].join("\n");
+        assert_eq!(pick_artifact(&lines, Some("app"), None, false).unwrap().to_string_lossy(), "/t/debug/app");
+        let lines = [
+            artifact("app", "bin", true, "/t/debug/deps/app-1"),
+            artifact("mytest", "test", true, "/t/debug/deps/mytest-1"),
+        ].join("\n");
+        assert_eq!(pick_artifact(&lines, None, Some("mytest"), false).unwrap().to_string_lossy(), "/t/debug/deps/mytest-1");
+    }
+
+    #[test]
+    fn build_scripts_are_never_picked() {
+        let lines = artifact("build-script-build", "custom-build", false, "/t/build/bs");
+        assert!(pick_artifact(&lines, None, None, false).is_none());
     }
 }

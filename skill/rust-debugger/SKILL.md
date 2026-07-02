@@ -17,9 +17,15 @@ plus `rust-analyzer` and `lldb-dap`.
 ```
 rdbg where parse_config                            # find where to break
 rdbg launch --cargo . --bin app --break src/config.rs:88 -- --threads 4
-rdbg launch --cargo . --test mymod --break src/mymod.rs:120 -- my_failing_test
+rdbg launch --cargo . --lib --break src/lib.rs:42 -- my_test        # a #[test] in the library
+rdbg launch --cargo . --test mytest --break tests/mytest.rs:12 -- some_case  # tests/mytest.rs
 rdbg launch --bin-path target/debug/app --break src/main.rs:11   # skip the build
 ```
+
+Pick the target by where the test lives: `--lib` for a `#[test]` inside the
+library (`#[cfg(test)] mod tests` in `src/` — the common case), `--test <name>`
+only for an integration test file `tests/<name>.rs`. In both, the words after
+`--` are the test-name filter, so exactly the test you name runs.
 
 Add `--panic` to also stop where any panic is raised, or `--break-fn <name>`.
 
@@ -28,6 +34,7 @@ through every hit and returns a table in one call:
 
 ```
 rdbg trace --cargo . --bin app --break src/x.rs:42 --capture i,sum --max 30
+rdbg trace --cargo . --lib --break src/lib.rs:42 --capture a,b -- my_test
 ```
 
 ## Breakpoints
@@ -93,7 +100,9 @@ rdbg def | hover | refs <file> <line> <col>
   arguments that caused it.
 - **Unexpected mutation.** `watch <var>`, then `continue` to stop the moment it
   changes.
-- **Failing test.** `--test <name> … -- <filter>`, break at the assertion.
+- **Failing test.** `--lib … -- <test_name>` for a `#[test]` in the library,
+  `--test <name> … -- <test_name>` for `tests/<name>.rs`; break at the assertion
+  or inside the code under test.
 
 ## Notes
 

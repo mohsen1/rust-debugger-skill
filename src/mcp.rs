@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::client::{cargo_build, ensure_daemon, request, ws_root};
+use crate::client::{build_target, ensure_daemon, request, ws_root};
 
 const PROTOCOL: &str = "2024-11-05";
 
@@ -16,8 +16,9 @@ fn tools() -> Vec<Value> {
     let obj = |props: Value| json!({"type": "object", "properties": props});
     vec![
         json!({"name": "debug_launch", "description":
-            "Build (or take) a Rust debug binary and run it to the first breakpoint. Provide `cargo` (project dir, with optional `bin`/`test` target) or `bin_path`. `breakpoints` are 'file.rs:line' strings; `panic:true` also breaks where any panic is raised.",
+            "Build (or take) a Rust debug binary and run it to the first breakpoint. Provide `cargo` (project dir) with an optional target — `bin` (binary), `test` (integration test tests/<name>.rs), or `lib:true` (the library's own #[cfg(test)] unit tests; pass the test name in `args` as the filter) — or `bin_path`. `breakpoints` are 'file.rs:line' strings; `panic:true` also breaks where any panic is raised.",
             "inputSchema": obj(json!({"cargo": {"type": "string"}, "bin": {"type": "string"}, "test": {"type": "string"},
+                "lib": {"type": "boolean"},
                 "bin_path": {"type": "string"}, "breakpoints": {"type": "array", "items": {"type": "string"}},
                 "fn_breaks": {"type": "array", "items": {"type": "string"}}, "args": {"type": "array", "items": {"type": "string"}},
                 "panic": {"type": "boolean"}}))}),
@@ -27,8 +28,9 @@ fn tools() -> Vec<Value> {
                 "panic": {"type": "boolean"}, "watch": {"type": "string"}, "condition": {"type": "string"},
                 "hit": {"type": "integer"}, "log": {"type": "string"}}))}),
         json!({"name": "debug_trace", "description":
-            "Run through breakpoint hits without stopping and return a compact table — one call instead of break/inspect/continue for every hit. Provide `cargo`(+`bin`/`test`) or `bin_path`, `breakpoints` ('file.rs:line'), and `capture` (variable paths evaluated at each hit; brief locals if omitted). `max` caps the hit count.",
+            "Run through breakpoint hits without stopping and return a compact table — one call instead of break/inspect/continue for every hit. Provide `cargo` (+`bin`/`test`/`lib:true`, where `lib:true` debugs the library's #[cfg(test)] unit tests with the test name in `args`) or `bin_path`, `breakpoints` ('file.rs:line'), and `capture` (variable paths evaluated at each hit; brief locals if omitted). `max` caps the hit count.",
             "inputSchema": obj(json!({"cargo": {"type": "string"}, "bin": {"type": "string"}, "test": {"type": "string"},
+                "lib": {"type": "boolean"},
                 "bin_path": {"type": "string"}, "breakpoints": {"type": "array", "items": {"type": "string"}},
                 "capture": {"type": "array", "items": {"type": "string"}}, "max": {"type": "integer"},
                 "args": {"type": "array", "items": {"type": "string"}}}))}),
@@ -87,14 +89,32 @@ fn parse_loc(spec: &str) -> (String, i64) {
     }
 }
 
+/// Program args from a tool call as strings (the test-name filter for test binaries).
+fn str_args(a: &Value) -> Vec<String> {
+    a["args"].as_array().map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
+/// Build (or take) the target for debug_launch/debug_trace. Returns the program
+/// and its args (the `--test`→lib fallback may add the test-name filter).
+fn resolve_program(a: &Value) -> Result<(PathBuf, Vec<String>), String> {
+    let mut args = str_args(a);
+    if let Some(c) = a["cargo"].as_str() {
+        let program = build_target(&PathBuf::from(c), a["bin"].as_str(), a["test"].as_str(),
+            a["lib"].as_bool().unwrap_or(false), &mut args)?;
+        Ok((program, args))
+    } else if let Some(bp) = a["bin_path"].as_str() {
+        Ok((PathBuf::from(bp).canonicalize().map_err(|_| format!(
+            "bin_path {bp:?} does not exist — build it first, or pass `cargo` (project dir) to build and debug in one step"))?, args))
+    } else {
+        Err("provide either `cargo` (project dir, with optional `bin`/`test`/`lib:true` target) or `bin_path`".into())
+    }
+}
+
 /// Launch + run through all hits + return the trace, in one tool call.
 fn trace_call(ws: &Path, a: &Value) -> (String, bool) {
-    let program = if let Some(c) = a["cargo"].as_str() {
-        cargo_build(&PathBuf::from(c), a["bin"].as_str(), a["test"].as_str())
-    } else if let Some(bp) = a["bin_path"].as_str() {
-        PathBuf::from(bp).canonicalize().unwrap_or_else(|_| PathBuf::from(bp))
-    } else {
-        return ("provide either `cargo` (project dir) or `bin_path`".into(), true);
+    let (program, args) = match resolve_program(a) {
+        Ok(v) => v,
+        Err(e) => return (format!("error: {e}"), true),
     };
     let bps: Vec<Value> = a["breakpoints"].as_array().map(|arr| arr.iter().filter_map(|b| b.as_str()).map(|b| {
         let (f, l) = parse_loc(b);
@@ -103,7 +123,7 @@ fn trace_call(ws: &Path, a: &Value) -> (String, bool) {
     ensure_daemon(ws);
     let launch = request(ws, &json!({"cmd": "launch", "program": program.to_string_lossy(),
         "cwd": program.parent().map(|p| p.to_string_lossy().to_string()),
-        "args": a["args"].as_array().cloned().unwrap_or_default(),
+        "args": args,
         "breakpoints": bps, "fn_breaks": [], "panic": false}), Duration::from_secs(300));
     match launch {
         Some(v) if v["ok"].as_bool().unwrap_or(false) => {}
@@ -130,12 +150,9 @@ fn call(ws: &Path, name: &str, a: &Value) -> (String, bool) {
     }
     let payload = match name {
         "debug_launch" => {
-            let program = if let Some(c) = a["cargo"].as_str() {
-                cargo_build(&PathBuf::from(c), a["bin"].as_str(), a["test"].as_str())
-            } else if let Some(bp) = a["bin_path"].as_str() {
-                PathBuf::from(bp).canonicalize().unwrap_or_else(|_| PathBuf::from(bp))
-            } else {
-                return ("provide either `cargo` (project dir) or `bin_path`".into(), true);
+            let (program, args) = match resolve_program(a) {
+                Ok(v) => v,
+                Err(e) => return (format!("error: {e}"), true),
             };
             let bps: Vec<Value> = a["breakpoints"].as_array().map(|arr| arr.iter().filter_map(|b| b.as_str()).map(|b| {
                 let (f, l) = parse_loc(b);
@@ -143,7 +160,7 @@ fn call(ws: &Path, name: &str, a: &Value) -> (String, bool) {
             }).collect()).unwrap_or_default();
             json!({"cmd": "launch", "program": program.to_string_lossy(),
                 "cwd": program.parent().map(|p| p.to_string_lossy().to_string()),
-                "args": a["args"].as_array().cloned().unwrap_or_default(),
+                "args": args,
                 "breakpoints": bps, "fn_breaks": a["fn_breaks"].as_array().cloned().unwrap_or_default(),
                 "panic": a["panic"].as_bool().unwrap_or(false)})
         }
