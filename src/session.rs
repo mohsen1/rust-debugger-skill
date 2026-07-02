@@ -69,6 +69,13 @@ impl Stop {
     }
 }
 
+/// One breakpoint hit captured during a `trace` run.
+pub struct TraceHit {
+    pub func: String,
+    pub loc: String,
+    pub values: Vec<(String, String)>,
+}
+
 pub struct Session {
     pub program: String,
     pub cwd: String,
@@ -479,6 +486,36 @@ impl Session {
         result
     }
 
+    /// Run through breakpoint hits without yielding: at each stop capture the
+    /// given variable paths (or brief locals), auto-continue, and collect a
+    /// compact trace. Starts from the current stop. One call replaces N
+    /// break/inspect/continue round-trips.
+    pub fn trace(&mut self, captures: &[String], max_hits: usize) -> Vec<TraceHit> {
+        let mut hits = vec![];
+        while hits.len() < max_hits {
+            let Some(stop) = self.last_stop.clone() else { break };
+            if stop.exited {
+                break;
+            }
+            let (func, loc) = match stop.top() {
+                Some(f) => (f.name.clone(), format!("{}:{}", f.file, f.line)),
+                None => (String::new(), String::new()),
+            };
+            let values = if captures.is_empty() {
+                vec![("locals".to_string(), self.locals_text(1).trim().replace('\n', "; "))]
+            } else {
+                captures.iter().map(|c| (c.clone(), self.evaluate(c))).collect()
+            };
+            hits.push(TraceHit { func, loc, values });
+            match self.cont() {
+                Ok(s) if s.exited => break,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        hits
+    }
+
     pub fn pause(&mut self) -> Result<Stop, String> {
         self.flush();
         let tid = self.cur_thread.or_else(|| self.threads.first().and_then(|t| t["id"].as_i64())).unwrap_or(1);
@@ -603,6 +640,25 @@ impl Session {
     }
 
     pub fn evaluate(&self, expr: &str) -> String {
+        // Prefer the variables tree: it auto-derefs `&references` and renders Rust
+        // aggregates, where lldb's expression evaluator rejects `.` on a pointer
+        // (`it.qty` on a `&Item`). Fall back to the evaluator for anything the
+        // tree walk can't resolve.
+        if let Some((rref, leaf)) = self.resolve_var_ref(expr) {
+            let resp = self.dap.request_soft("variables", json!({"variablesReference": rref}), Duration::from_secs(10));
+            if let Some(vars) = resp["body"]["variables"].as_array() {
+                if let Some(v) = vars.iter().find(|v| v["name"].as_str() == Some(leaf.as_str())) {
+                    let typ = short_type(v["type"].as_str().unwrap_or(""));
+                    let val = v["value"].as_str().unwrap_or("");
+                    if !val.is_empty() {
+                        return format!("{typ} = {val}").trim_matches(|c| c == ' ' || c == '=').to_string();
+                    }
+                    if !typ.is_empty() {
+                        return typ;
+                    }
+                }
+            }
+        }
         let Some(f) = self.frame() else { return "(not stopped)".into() };
         let resp = self.dap.request_soft("evaluate", json!({"expression": expr, "frameId": f.id, "context": "hover"}), Duration::from_secs(15));
         if !resp["success"].as_bool().unwrap_or(false) {

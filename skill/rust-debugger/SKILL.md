@@ -23,6 +23,13 @@ rdbg launch --bin-path target/debug/app --break src/main.rs:11   # skip the buil
 
 Add `--panic` to also stop where any panic is raised, or `--break-fn <name>`.
 
+To watch a value evolve without stepping, `trace` instead of `launch` — it runs
+through every hit and returns a table in one call:
+
+```
+rdbg trace --cargo . --bin app --break src/x.rs:42 --capture i,sum --max 30
+```
+
 ## Breakpoints
 
 Set or change these any time, including while paused.
@@ -52,7 +59,8 @@ rdbg restart
 
 ```
 rdbg vars                             # locals with real Rust values
-rdbg eval items[0].qty                # a variable path
+rdbg eval items[0].qty sum            # one or more variable paths
+rdbg set cfg.threads = 8 --then continue   # change a value and resume
 rdbg set cfg.threads = 8              # change a value
 rdbg watch-expr add total             # re-shown at every stop
 rdbg bt                               # backtrace

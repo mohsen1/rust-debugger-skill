@@ -26,6 +26,12 @@ fn tools() -> Vec<Value> {
             "inputSchema": obj(json!({"file": {"type": "string"}, "line": {"type": "integer"}, "fn": {"type": "string"},
                 "panic": {"type": "boolean"}, "watch": {"type": "string"}, "condition": {"type": "string"},
                 "hit": {"type": "integer"}, "log": {"type": "string"}}))}),
+        json!({"name": "debug_trace", "description":
+            "Run through breakpoint hits without stopping and return a compact table — one call instead of break/inspect/continue for every hit. Provide `cargo`(+`bin`/`test`) or `bin_path`, `breakpoints` ('file.rs:line'), and `capture` (variable paths evaluated at each hit; brief locals if omitted). `max` caps the hit count.",
+            "inputSchema": obj(json!({"cargo": {"type": "string"}, "bin": {"type": "string"}, "test": {"type": "string"},
+                "bin_path": {"type": "string"}, "breakpoints": {"type": "array", "items": {"type": "string"}},
+                "capture": {"type": "array", "items": {"type": "string"}}, "max": {"type": "integer"},
+                "args": {"type": "array", "items": {"type": "string"}}}))}),
         json!({"name": "debug_breakpoints", "description": "List all breakpoints with ids.", "inputSchema": obj(json!({}))}),
         json!({"name": "debug_remove_breakpoint", "description": "Remove a breakpoint by id (or 'panic').",
             "inputSchema": obj(json!({"id": {"type": "string"}}))}),
@@ -78,8 +84,43 @@ fn parse_loc(spec: &str) -> (String, i64) {
     }
 }
 
+/// Launch + run through all hits + return the trace, in one tool call.
+fn trace_call(ws: &Path, a: &Value) -> (String, bool) {
+    let program = if let Some(c) = a["cargo"].as_str() {
+        cargo_build(&PathBuf::from(c), a["bin"].as_str(), a["test"].as_str())
+    } else if let Some(bp) = a["bin_path"].as_str() {
+        PathBuf::from(bp).canonicalize().unwrap_or_else(|_| PathBuf::from(bp))
+    } else {
+        return ("provide either `cargo` (project dir) or `bin_path`".into(), true);
+    };
+    let bps: Vec<Value> = a["breakpoints"].as_array().map(|arr| arr.iter().filter_map(|b| b.as_str()).map(|b| {
+        let (f, l) = parse_loc(b);
+        json!({"file": f, "line": l})
+    }).collect()).unwrap_or_default();
+    ensure_daemon(ws);
+    let launch = request(ws, &json!({"cmd": "launch", "program": program.to_string_lossy(),
+        "cwd": program.parent().map(|p| p.to_string_lossy().to_string()),
+        "args": a["args"].as_array().cloned().unwrap_or_default(),
+        "breakpoints": bps, "fn_breaks": [], "panic": false}), Duration::from_secs(300));
+    match launch {
+        Some(v) if v["ok"].as_bool().unwrap_or(false) => {}
+        Some(v) => return (format!("launch failed: {}", v["error"].as_str().unwrap_or("?")), true),
+        None => return ("the rdbg daemon did not respond".into(), true),
+    }
+    let t = request(ws, &json!({"cmd": "trace", "captures": a["capture"].as_array().cloned().unwrap_or_default(),
+        "max": a["max"].as_i64().unwrap_or(50)}), Duration::from_secs(300));
+    match t {
+        Some(tv) if tv["ok"].as_bool().unwrap_or(false) =>
+            (format!("trace: {} hit(s)\n{}", tv["hits"].as_i64().unwrap_or(0), tv["trace"].as_str().unwrap_or("")), false),
+        _ => ("trace failed".into(), true),
+    }
+}
+
 /// Map a tool call to a daemon request; returns (text, is_error).
 fn call(ws: &Path, name: &str, a: &Value) -> (String, bool) {
+    if name == "debug_trace" {
+        return trace_call(ws, a);
+    }
     let payload = match name {
         "debug_launch" => {
             let program = if let Some(c) = a["cargo"].as_str() {

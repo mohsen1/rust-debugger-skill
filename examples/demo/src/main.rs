@@ -7,7 +7,7 @@ struct Item { name: String, qty: u32 }
 fn total(items: &[Item]) -> u32 {
     let mut sum = 0;
     for it in items {
-        sum += it.qty;                    // line 12: breakpoint / watch `sum`
+        sum += it.qty;                    // loop body: break/trace here
     }
     if sum == 999 { panic!("unlucky total"); }
     sum

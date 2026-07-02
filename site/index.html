@@ -66,6 +66,15 @@ curl -fsSL https://azimi.me/rust-debugger-skill/install.sh | sh</pre>
 <span class="c">$</span> rdbg set cfg.threads = 8   <span class="c"># change it, keep running</span>
 <span class="c">$</span> rdbg step over</pre>
 
+  <p>Or watch a value evolve across a whole loop in <b>one</b> call, instead of
+  stepping and re-reading it each time:</p>
+
+  <pre><span class="c">$</span> rdbg trace --cargo . --bin app --break src/sum.rs:44 --capture i,sum
+trace: 3 hit(s)
+ #1   app::total  sum.rs:44   i=0  sum=0
+ #2   app::total  sum.rs:44   i=1  sum=3
+ #3   app::total  sum.rs:44   i=2  sum=3   <span class="c">&lt;- sum stops advancing</span></pre>
+
   <h2>Why</h2>
   <p>An agent editing Rust can read the source but not the run. It sees that
   <code>parse_config</code> exists; it can't see that <code>threads</code> came
