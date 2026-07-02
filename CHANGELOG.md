@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- `--lib` for `rdbg launch` / `rdbg trace` (MCP `debug_launch` / `debug_trace`
+  accept `lib: true`) — build and debug the library's own unit-test binary
+  (inline `#[cfg(test)] mod tests`), with the test name after `--` as the
+  filter: `rdbg launch --cargo . --lib --break src/lib.rs:42 -- my_test`.
+- Forgiving `--test <name>`: when `<name>` is not an integration-test target
+  (no `tests/<name>.rs`) but matches a `#[test]` in the library's unit tests,
+  rdbg falls back to `--lib` with `<name>` as the test filter; otherwise the
+  error spells out the correct `--lib` invocation instead of cargo's bare
+  "no test target named".
+- Actionable launch errors: unknown args, missing `--break`, missing
+  `--cargo`/`--bin-path`, and a nonexistent `--bin-path` all say the correct
+  invocation; a failed cargo build returns the rendered compiler diagnostics.
+  Build failures no longer `exit(2)` out of the MCP server.
 - `rdbg do '<cmd>; <cmd>; ...'` / MCP `debug_do` — run several subcommands in one
   call. Each is labeled with its command; the batch stops at the first error or
   program exit. One call instead of a fixed break/inspect/continue recipe.

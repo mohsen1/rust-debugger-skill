@@ -89,6 +89,7 @@ CLI directly. Run `rdbg` with no arguments for the full command list.
 ```sh
 rdbg where parse_config                              # find where to break
 rdbg launch --cargo . --bin app --break src/x.rs:88  # build and run to it
+rdbg launch --cargo . --lib --break src/lib.rs:42 -- my_test   # a #[test] in the library
 rdbg vars ; rdbg eval cfg.threads sum ; rdbg step over
 rdbg set cfg.threads = 4 --then continue             # test a fix live
 rdbg trace --cargo . --bin app --break src/x.rs:88 --capture cfg.threads
