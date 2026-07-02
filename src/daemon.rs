@@ -104,6 +104,17 @@ fn handle(daemon: &Arc<Mutex<Daemon>>, stream: UnixStream) -> bool {
     shutdown
 }
 
+/// Compact tabular render of a trace run — one line per breakpoint hit.
+fn format_trace(hits: &[crate::session::TraceHit]) -> String {
+    if hits.is_empty() {
+        return "(no breakpoint hits)".to_string();
+    }
+    hits.iter().enumerate().map(|(i, h)| {
+        let vals = h.values.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("  ");
+        format!(" #{:<3} {}  {}   {}", i + 1, h.func, h.loc, vals)
+    }).collect::<Vec<_>>().join("\n")
+}
+
 /// Read-only stop summary (frame + source + watches).
 fn summarize(s: &Session, stop: &Stop) -> Value {
     if stop.exited {
@@ -255,6 +266,18 @@ impl Daemon {
             }
             "pause" => return self.run_stop(|s| s.pause()),
             "restart" => return self.run_stop(|s| s.restart()),
+            "trace" => {
+                let captures: Vec<String> = req["captures"].as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                let max = req["max"].as_i64().unwrap_or(50).max(1) as usize;
+                let hits = self.session.as_mut().unwrap().trace(&captures, max);
+                let out: String = self.session.as_ref().map(|s| s.output.concat()).unwrap_or_default();
+                let text = format_trace(&hits);
+                let n = hits.len();
+                return json!({"ok": true, "trace": text, "hits": n,
+                              "output": if out.is_empty() { Value::Null } else { json!(out[out.len().saturating_sub(1000)..]) }});
+            }
             "thread" => {
                 let id = req["id"].as_i64().unwrap_or(0);
                 let ok = self.session.as_mut().unwrap().select_thread(id);

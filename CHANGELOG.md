@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- `rdbg trace` / MCP `debug_trace` — run through breakpoint hits without stopping
+  and return a compact table (one call instead of break/inspect/continue per
+  hit). `--capture <paths>` evaluates variable paths at each hit; `--max` caps it.
+- `rdbg eval <path>...` takes multiple paths in one call.
+- `rdbg set <path> = <value> --then continue|step` — change a value and resume,
+  to test a fix live.
+- `eval` (and `trace` capture) resolve `&reference` paths via the variables tree,
+  so `it.qty` on a `&Item` works instead of erroring.
+
+
 ## 0.1.0
 
 - `rdbg` CLI and `rdbg mcp` MCP server (24 tools) over one per-project daemon

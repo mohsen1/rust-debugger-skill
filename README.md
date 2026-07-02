@@ -26,6 +26,16 @@ $ rdbg set sum = 100          # change a variable, keep running
 $ rdbg step over
 ```
 
+Watch a value evolve across a loop in **one** call instead of stepping:
+
+```console
+$ rdbg trace --cargo . --bin demo --break src/main.rs:10 --capture sum,it.qty
+trace: 3 hit(s)
+ #1   demo::total  main.rs:10   sum=0  it.qty=3
+ #2   demo::total  main.rs:10   sum=3  it.qty=0
+ #3   demo::total  main.rs:10   sum=3  it.qty=7
+```
+
 By default:
 
 - Breakpoints can be line, function, conditional (`--if`), hit-count (`--hit`),
@@ -79,7 +89,9 @@ CLI directly. Run `rdbg` with no arguments for the full command list.
 ```sh
 rdbg where parse_config                              # find where to break
 rdbg launch --cargo . --bin app --break src/x.rs:88  # build and run to it
-rdbg vars ; rdbg eval cfg.threads ; rdbg step over
+rdbg vars ; rdbg eval cfg.threads sum ; rdbg step over
+rdbg set cfg.threads = 4 --then continue             # test a fix live
+rdbg trace --cargo . --bin app --break src/x.rs:88 --capture cfg.threads
 rdbg break --panic                                   # stop where a panic fires
 rdbg watch cfg.threads                               # stop when it changes
 ```
@@ -126,6 +138,20 @@ paused between an agent's tool calls. State lives in `.rdbg/` — add it to
   partial; the stopped thread is always usable.
 - Rust value rendering is best on recent `lldb` / `codelldb`; older `lldb`
   (14) shows some containers as raw fields.
+
+## Roadmap
+
+Every command is one turn for an agent, so the theme is collapsing round-trips.
+`trace`, multi-path `eval`, and `set --then` are the first pass. Next:
+
+- **Delta stops** — each stop shows only the locals that *changed* since the last
+  one (`~ sum: u32 = 6 (was 3)`), not the full dump.
+- **`rdbg do 'break x; continue; vars; eval sum'`** — a fixed investigation
+  recipe as one call.
+- **One-shot panic triage** — `rdbg debug --test t --panic` returns the panic
+  message, the first user frame with its arguments, and locals in one bundle.
+- **Predicate run-to** — `rdbg continue --until 'sum > 100'`, evaluated
+  server-side so it works past lldb's condition limits.
 
 ## Build
 

@@ -16,6 +16,10 @@ LAUNCH
   rdbg launch --bin-path <path> --break f.rs:L [...]      (skip the build)
     at launch you may also pass  --break-fn <name>  --panic
 
+TRACE (one call instead of break→inspect→continue×N)
+  rdbg trace --cargo . --bin app --break f.rs:L --capture i,sum --max 30 -- ARGS
+    runs through every hit, captures the paths at each, returns a table
+
 BREAKPOINTS (set or change any time, even while paused)
   rdbg break f.rs:L [--if <expr>] [--hit <N>] [--log <msg>]
   rdbg break --fn <name>        break entering a function
@@ -37,8 +41,8 @@ THREADS / FRAMES
 
 INSPECT / MUTATE
   rdbg vars [--depth N]         locals with real Rust values
-  rdbg eval <path>             evaluate a variable path (foo.bar[2].x)
-  rdbg set <path> = <value>    change a variable's value
+  rdbg eval <path> [<path>...]  evaluate one or more variable paths
+  rdbg set <path> = <value> [--then continue|step]   change a value (test a fix)
   rdbg watch-expr add|rm <path>
   rdbg list [--radius N] | bt | state
 
@@ -228,7 +232,8 @@ pub fn main(args: &[String]) -> i32 {
 
     match cmd {
         "status" => println!("{}", serde_json::to_string_pretty(&r(json!({"cmd": "status"})).unwrap_or(Value::Null)).unwrap()),
-        "launch" => return do_launch(&ws, rest),
+        "launch" => return do_launch(&ws, rest, false),
+        "trace" => return do_launch(&ws, rest, true),
         "break" => {
             if rest.iter().any(|a| a == "--fn") {
                 let resp = r(json!({"cmd": "bp_fn", "name": opt(rest, "--fn").unwrap_or("")}));
@@ -293,14 +298,30 @@ pub fn main(args: &[String]) -> i32 {
             let depth = opt(rest, "--depth").and_then(|d| d.parse::<i64>().ok()).unwrap_or(3);
             print_field(r(json!({"cmd": "vars", "depth": depth})), "vars");
         }
-        "eval" => print_field(r(json!({"cmd": "eval", "expr": rest.first().cloned().unwrap_or_default()})), "value"),
+        "eval" => {
+            // evaluate one or more variable paths in a single agent call
+            for path in rest.iter().filter(|p| !p.starts_with("--")) {
+                let v = r(json!({"cmd": "eval", "expr": path}));
+                let val = v.as_ref().filter(|v| v["ok"].as_bool().unwrap_or(false))
+                    .map(|v| v["value"].as_str().unwrap_or("").to_string())
+                    .unwrap_or_else(|| "error".into());
+                println!("{path} = {val}");
+            }
+        }
         "set" => {
-            let joined = rest.join(" ");
+            // rdbg set <path> = <value> [--then continue|step]   (test a fix live)
+            let then = rest.iter().position(|a| a == "--then");
+            let body: Vec<String> = rest.iter().take(then.unwrap_or(rest.len())).cloned().collect();
+            let joined = body.join(" ");
             let (path, value) = match joined.split_once('=') {
                 Some((p, v)) => (p.trim().to_string(), v.trim().to_string()),
-                None => (rest.first().cloned().unwrap_or_default(), rest[1..].join(" ")),
+                None => (body.first().cloned().unwrap_or_default(), body[1..].join(" ")),
             };
             print_field(r(json!({"cmd": "set", "path": path, "value": value})), "value");
+            if let Some(i) = then {
+                let after = rest.get(i + 1).map(|s| s.as_str()).unwrap_or("continue");
+                print_result_stop(if after == "step" { r(json!({"cmd": "step", "kind": "over"})) } else { r(json!({"cmd": "continue"})) });
+            }
         }
         "watch-expr" => {
             let action = rest.first().map(|s| s.as_str()).filter(|s| *s == "add" || *s == "rm").unwrap_or("list");
@@ -364,11 +385,13 @@ fn print_field(resp: Option<Value>, field: &str) {
     }
 }
 
-fn do_launch(ws: &Path, rest: &[String]) -> i32 {
+fn do_launch(ws: &Path, rest: &[String], trace_mode: bool) -> i32 {
     let (mut cargo, mut bin_path, mut bin, mut test): (Option<String>, Option<String>, Option<String>, Option<String>) = (None, None, None, None);
     let mut breaks: Vec<String> = vec![];
     let mut fn_breaks: Vec<String> = vec![];
     let mut args: Vec<String> = vec![];
+    let mut captures: Vec<String> = vec![];
+    let mut max: i64 = 50;
     let mut panic = false;
     let mut i = 0;
     while i < rest.len() {
@@ -379,6 +402,8 @@ fn do_launch(ws: &Path, rest: &[String]) -> i32 {
             "--test" => { test = rest.get(i + 1).cloned(); i += 2; }
             "--break" => { if let Some(b) = rest.get(i + 1) { breaks.push(b.clone()); } i += 2; }
             "--break-fn" => { if let Some(b) = rest.get(i + 1) { fn_breaks.push(b.clone()); } i += 2; }
+            "--capture" => { if let Some(c) = rest.get(i + 1) { captures.extend(c.split(',').map(|s| s.trim().to_string())); } i += 2; }
+            "--max" => { max = rest.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(50); i += 2; }
             "--panic" => { panic = true; i += 1; }
             "--" => { args = rest[i + 1..].to_vec(); break; }
             other => { eprintln!("unknown launch arg {other:?}"); return 2; }
@@ -403,7 +428,23 @@ fn do_launch(ws: &Path, rest: &[String]) -> i32 {
         "cwd": program.parent().map(|p| p.to_string_lossy().to_string()),
         "args": args, "breakpoints": bps, "fn_breaks": fn_breaks, "panic": panic}), Duration::from_secs(300));
     match resp {
-        Some(v) if v["ok"].as_bool().unwrap_or(false) => { print_stop(&v["stop"]); 0 }
+        Some(v) if v["ok"].as_bool().unwrap_or(false) => {
+            if !trace_mode {
+                print_stop(&v["stop"]);
+                return 0;
+            }
+            // run through all hits and return the compact trace in one call
+            let t = request(ws, &json!({"cmd": "trace", "captures": captures, "max": max}), Duration::from_secs(300));
+            match t {
+                Some(tv) if tv["ok"].as_bool().unwrap_or(false) => {
+                    println!("trace: {} hit(s)", tv["hits"].as_i64().unwrap_or(0));
+                    println!("{}", tv["trace"].as_str().unwrap_or(""));
+                    if let Some(o) = tv["output"].as_str() { if !o.is_empty() { println!("--- output ---\n{}", o.trim_end()); } }
+                    0
+                }
+                _ => { eprintln!("trace failed"); 1 }
+            }
+        }
         Some(v) => { eprintln!("launch failed: {}", v["error"].as_str().unwrap_or("unknown")); 1 }
         None => { eprintln!("launch failed: daemon did not respond"); 1 }
     }
