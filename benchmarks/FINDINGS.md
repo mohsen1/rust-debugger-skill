@@ -75,3 +75,44 @@ upside.
    a blanket mandate wastes tokens. The only justified path is a *selective*
    trigger that fires when a read loop is actually failing — and the bar to beat
    "just re-read the code" is high.
+
+## Are debugger trajectories better *learning* material? (grounding analysis)
+
+20 transcripts (10 read-loop, 10 debugger) scored by Opus teammates on grounded
+observation vs confabulation. Means:
+
+| | control (read) | strong (rdbg) |
+|---|---|---|
+| grounded runtime observations | 0.5 | **1.6** (3.2×) |
+| grounding score (1–5) | 2.0 | **3.1** |
+| unverified runtime claims | 2.0 | 1.8 (−10% only) |
+| tool friction | 0.3 | **3.9** (13×) |
+| wrong turns | 0.0 | 1.4 |
+| aha came from | reading 10/10 | reading 8/10, rdbg 2/10 |
+
+**What's real:** debugger trajectories carry ~3× more grounded runtime facts and
+score higher on grounding. Read-loop trajectories are near-empty of observed
+fact and actively **confabulate** — they assert unobserved I/O (`[7,9]→80`) as if
+executed, ~2 fabricated claims per run. So as data that teaches *how code runs*,
+the debugger set is genuinely richer, and the read set teaches a bad habit.
+
+**What's not:** the debugger does NOT stop the model confabulating (claims only
+2.0→1.8). The fix insight came from **reading in 80%** of debugger runs — rdbg was
+mostly post-hoc verification (the true epistemic source in ~2–4/10). And ~13× of
+the "extra tokens" is **tool friction** (rdbg CLI arg errors — `--lib`
+unsupported, test-target naming), which is anti-signal that teaches flailing.
+
+**Per training regime:**
+- **SFT / distillation** — modest win *if curated*: keep the grounded,
+  non-redundant runs; drop the friction/failed ones. Its real value is not
+  teaching confabulation (which the read set does).
+- **Outcome-RL (pass-only reward)** — net-negative. Reading solved 80%; the extra
+  tokens + friction are pure cost; RL correctly learns to drop rdbg. (Matches the
+  token-ROI result.)
+- **Process / grounding-aware reward** — the regime where it *pays*, and the only
+  one whose reward can even see the difference. Shape on "observe before assert,"
+  but reward observations that DISAMBIGUATE (not re-confirm) and subtract friction,
+  or the model farms debugger calls for grounding credit.
+
+Side finding worth acting on: most friction is rdbg CLI ergonomics — fixing
+`--lib`/test-target handling would clean up both the tool and the trajectories.
