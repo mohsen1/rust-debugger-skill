@@ -4,48 +4,114 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rdbg — Rust debugging for coding agents</title>
-<meta name="description" content="IDE-grade Rust debugging for Claude Code and Codex — a skill and an MCP server, built on rust-analyzer and lldb-dap.">
+<meta name="description" content="IDE-grade Rust debugging for Claude Code and Codex — a skill and an MCP server, built on rust-analyzer and lldb-dap. Break on a repro and read real runtime values instead of println debugging.">
+<meta property="og:title" content="rdbg — Rust debugging for coding agents">
+<meta property="og:description" content="Break on a repro and read real runtime values, from Claude Code or Codex. A skill and an MCP server over rust-analyzer + lldb-dap.">
 <style>
   :root { color-scheme: dark; }
-  body { background: #0d1117; color: #c9d1d9; font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         max-width: 720px; margin: 0 auto; padding: 3rem 1.25rem; }
-  h1 { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.9rem; margin: 0 0 .25rem; }
-  h1 .b { color: #58a6ff; }
-  p.lead { font-size: 1.15rem; color: #adbac7; margin-top: 0; }
+  * { box-sizing: border-box; }
+  body { background: #0d1117; color: #c9d1d9; font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 760px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
   code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  pre { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; overflow-x: auto; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  h1 { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 2rem; margin: 0; }
+  h1 .b { color: #58a6ff; }
+  .star { min-height: 30px; }
+  p.lead { font-size: 1.2rem; color: #adbac7; margin: .25rem 0 1.5rem; }
+  pre { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; overflow-x: auto; font-size: .92rem; }
   pre.install { font-size: 1.05rem; }
   .c { color: #8b949e; }
-  a { color: #58a6ff; }
-  h2 { font-size: 1.15rem; margin-top: 2.25rem; border-bottom: 1px solid #21262d; padding-bottom: .3rem; }
+  .k { color: #79c0ff; }
+  h2 { font-size: 1.2rem; margin-top: 2.4rem; border-bottom: 1px solid #21262d; padding-bottom: .3rem; }
   ul { padding-left: 1.2rem; }
+  li { margin: .3rem 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 620px) { .cols { grid-template-columns: 1fr; } }
   footer { margin-top: 3rem; color: #8b949e; font-size: .9rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  td { border-top: 1px solid #21262d; padding: .35rem .5rem; vertical-align: top; }
+  td code { color: #79c0ff; }
 </style>
 </head>
 <body>
-  <h1><span class="b">rdbg</span></h1>
-  <p class="lead">IDE-grade Rust debugging for coding agents. Set breakpoints, run,
-  and read the real runtime values of variables — instead of guessing from
+  <div class="top">
+    <h1><span class="b">rdbg</span></h1>
+    <span class="star">
+      <iframe src="https://ghbtns.com/github-btn.html?user=mohsen1&amp;repo=rust-debugger-skill&amp;type=star&amp;count=true&amp;size=large"
+              frameborder="0" scrolling="0" width="150" height="30" title="Star mohsen1/rust-debugger-skill on GitHub"></iframe>
+    </span>
+  </div>
+
+  <p class="lead">Debug a Rust program from a coding agent. Set breakpoints, run,
+  and read the real values of your variables — instead of guessing from
   <code>println!</code> and recompiling.</p>
 
   <pre class="install"><span class="c"># macOS and Linux</span>
 curl -fsSL https://azimi.me/rust-debugger-skill/install.sh | sh</pre>
 
-  <p>It also needs <code>rust-analyzer</code>
-  (<code>rustup component add rust-analyzer</code>) and <code>lldb-dap</code>.</p>
+  <p>A single static binary over <a href="https://rust-analyzer.github.io/">rust-analyzer</a>
+  and <code>lldb-dap</code>. Use it as a <b>skill</b> (the <code>rdbg</code> CLI)
+  or an <b>MCP server</b> (<code>rdbg mcp</code>) in Claude Code and Codex.</p>
+
+  <pre><span class="c">$</span> rdbg launch --cargo . --bin app --break src/config.rs:88
+<span class="k">&gt;&gt;&gt; STOP [breakpoint]</span> app::parse_config  config.rs:88  (thread 1)
+   -&gt;    88 |     let cfg = Config::from(&amp;raw);
+<span class="c">$</span> rdbg vars
+  cfg: Config
+    threads: usize = 4
+    paths: Vec&lt;PathBuf&gt; (size=2)
+<span class="c">$</span> rdbg eval cfg.threads      <span class="c"># usize = 4</span>
+<span class="c">$</span> rdbg set cfg.threads = 8   <span class="c"># change it, keep running</span>
+<span class="c">$</span> rdbg step over</pre>
+
+  <h2>Why</h2>
+  <p>An agent editing Rust can read the source but not the run. It sees that
+  <code>parse_config</code> exists; it can't see that <code>threads</code> came
+  back <code>0</code>. The usual workaround — add <code>println!</code>, rebuild,
+  read the log, delete it — is slow and only shows what you thought to print.
+  <code>rdbg</code> gives the agent the other half: break where a value is wrong,
+  read it, step to watch it change, and change it in place to test a fix.</p>
 
   <h2>What it does</h2>
-  <ul>
-    <li>Breakpoints: line, function, conditional, hit-count, logpoint, <b>panic</b>, and watchpoints.</li>
-    <li>Step over / in / out, run-to-line, pause, restart.</li>
-    <li>Read locals as real Rust values, evaluate paths, and <b>change a variable live</b>.</li>
-    <li>Jump to definition, hover, and find references via rust-analyzer.</li>
-  </ul>
+  <div class="cols">
+    <ul>
+      <li>Breakpoints: line, function, conditional, hit-count, logpoint</li>
+      <li><b>Panic breakpoints</b> — stop on the frame that raised a panic</li>
+      <li><b>Watchpoints</b> — stop when a value changes</li>
+      <li>Step over / in / out / instruction, run-to-line, pause, restart</li>
+    </ul>
+    <ul>
+      <li>Locals as real Rust values (<code>Vec</code>, <code>String</code>, structs, enums)</li>
+      <li>Evaluate variable paths; <b>set a variable live</b></li>
+      <li>Watch expressions, backtraces, thread &amp; frame selection</li>
+      <li>Jump to definition, hover, references (rust-analyzer)</li>
+    </ul>
+  </div>
 
-  <h2>Use it</h2>
-  <p>As a skill (the <code>rdbg</code> CLI) or as an MCP server (<code>rdbg mcp</code>)
-  in Claude Code and Codex. See the
-  <a href="https://github.com/mohsen1/rust-debugger-skill">README</a>.</p>
+  <h2>Use it as an MCP server</h2>
+  <p>The same binary exposes 24 tools. Claude Code — <code>.mcp.json</code>, or
+  <code>claude mcp add rustdbg -- rdbg mcp</code>:</p>
+  <pre>{ "mcpServers": { "rustdbg": { "command": "rdbg", "args": ["mcp"] } } }</pre>
+  <p>Codex — <code>~/.codex/config.toml</code>:</p>
+  <pre>[mcp_servers.rustdbg]
+command = "rdbg"
+args = ["mcp"]</pre>
+
+  <h2>How it works</h2>
+  <p>A per-project daemon holds one paused <code>lldb-dap</code> session and a
+  warm <code>rust-analyzer</code>, and serves commands over a Unix socket. The
+  CLI and the MCP server are thin clients, so a breakpoint set in one call is
+  still there in the next and the program stays paused between an agent's tool
+  calls.</p>
+
+  <h2>Requirements</h2>
+  <ul>
+    <li><code>rust-analyzer</code> — <code>rustup component add rust-analyzer</code></li>
+    <li><code>lldb-dap</code> — Xcode command line tools on macOS, <code>apt install lldb</code> on Linux. <code>codelldb</code>, if present, adds full expression evaluation.</li>
+    <li>A debug build (the default <code>cargo build</code>).</li>
+  </ul>
 
   <footer>
     <a href="https://github.com/mohsen1/rust-debugger-skill">github.com/mohsen1/rust-debugger-skill</a>

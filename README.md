@@ -5,6 +5,8 @@ actual values of variables instead of guessing from `println!`.** A single
 binary that wraps `rust-analyzer` and `lldb-dap`, usable as a CLI skill or an MCP
 server for Claude Code and Codex.
 
+Website: <https://azimi.me/rust-debugger-skill/>
+
 ```sh
 curl -fsSL https://azimi.me/rust-debugger-skill/install.sh | sh
 ```
