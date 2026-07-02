@@ -141,8 +141,9 @@ def summarize(rows: list[dict]) -> None:
 
 
 def main() -> None:
+    all_tasks = ",".join(sorted(p.name for p in (ROOT / "tasks").iterdir() if p.is_dir()))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tasks", default="accumulator,panic_index")
+    ap.add_argument("--tasks", default=all_tasks, help="comma-separated; default: all")
     ap.add_argument("--agents", default="claude,codex")
     ap.add_argument("--conditions", default="without,with")
     ap.add_argument("--repeat", type=int, default=1)
