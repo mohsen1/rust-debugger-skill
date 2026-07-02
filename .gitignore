@@ -1,0 +1,12 @@
+# rustdbg runtime state
+.rustdbg/
+# python
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+# rust build output (examples)
+target/
