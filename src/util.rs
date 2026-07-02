@@ -38,6 +38,48 @@ pub fn write_framed<W: Write>(w: &mut W, payload: &Value) {
     let _ = w.flush();
 }
 
+/// Map an error message to the outcome taxonomy carried in every response's
+/// `status` field. The full set of values is:
+/// `ok | user_error | target_error | build_error | debug_adapter_error |
+/// timeout | no_session | no_new_information`.
+/// (`ok` is produced for successes, not by this function; `no_new_information`
+/// is reserved for future use — nothing emits it yet.)
+pub fn classify_error(e: &str) -> &'static str {
+    if e.contains("no debug session") {
+        return "no_session";
+    }
+    if e.contains("timed out") || e.contains("did not respond") || e.contains("no stop/exit event")
+        || e.contains("still warming up") {
+        return "timeout";
+    }
+    if e.contains("lldb") || e.contains("adapter") || e.contains("failed to launch")
+        || e.contains("launch did not complete") || e.contains("relaunch failed") {
+        return "debug_adapter_error";
+    }
+    if is_target_error(e) {
+        return "target_error";
+    }
+    if e.contains("could not compile") || e.contains("error[E") || e.contains("could not run cargo") {
+        return "build_error";
+    }
+    "user_error"
+}
+
+/// Cargo told us the requested target does not exist (as opposed to failing
+/// to compile it): `--bin`/`--test`/`--lib` naming nothing buildable.
+fn is_target_error(e: &str) -> bool {
+    e.contains("no test target") || e.contains("no bin target") || e.contains("no example target")
+        || e.contains("no bench target") || e.contains("no integration test target")
+        || e.contains("no library targets") || e.contains("built nothing debuggable")
+}
+
+/// Classify a `cargo_build`/`build_target` failure: a missing/unknown target
+/// is `target_error`; anything else (a compile failure, cargo itself failing
+/// to run) is `build_error`.
+pub fn classify_build_error(e: &str) -> &'static str {
+    if is_target_error(e) { "target_error" } else { "build_error" }
+}
+
 fn on_path(name: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -177,3 +219,34 @@ pub fn kill_group(pid: u32) {
 
 #[cfg(not(unix))]
 pub fn kill_group(_pid: u32) {}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_build_error, classify_error};
+
+    #[test]
+    fn taxonomy_covers_the_known_error_shapes() {
+        assert_eq!(classify_error("no debug session (run `rdbg launch` first)"), "no_session");
+        assert_eq!(classify_error("timed out waiting for continue"), "timeout");
+        assert_eq!(classify_error("no stop/exit event (program may still be running — try `pause`)"), "timeout");
+        assert_eq!(classify_error("rust-analyzer is still warming up — retry in a moment"), "timeout");
+        assert_eq!(classify_error("no lldb-dap adapter found (install LLVM/lldb, or Xcode command line tools)"), "debug_adapter_error");
+        assert_eq!(classify_error("failed to launch /usr/bin/lldb-dap: No such file"), "debug_adapter_error");
+        assert_eq!(classify_error("adapter never sent `initialized`"), "debug_adapter_error");
+        assert_eq!(classify_error("relaunch failed: spawn error"), "debug_adapter_error");
+        assert_eq!(classify_error("unknown command \"bogus\""), "user_error");
+        assert_eq!(classify_error("breakpoint not found"), "user_error");
+        assert_eq!(classify_error(""), "user_error");
+    }
+
+    #[test]
+    fn build_failures_split_into_target_and_build_errors() {
+        assert_eq!(classify_build_error("error: no test target named `nope`."), "target_error");
+        assert_eq!(classify_build_error("no integration test target 'nope' — tests/nope.rs does not exist"), "target_error");
+        assert_eq!(classify_build_error("error: no bin target named `nope`"), "target_error");
+        assert_eq!(classify_build_error("no library targets found in package `app`"), "target_error");
+        assert_eq!(classify_build_error("cargo built nothing debuggable in /x — pick a target"), "target_error");
+        assert_eq!(classify_build_error("error[E0308]: mismatched types\nerror: could not compile `app`"), "build_error");
+        assert_eq!(classify_build_error("could not run cargo in /x: No such file"), "build_error");
+    }
+}

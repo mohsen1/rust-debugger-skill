@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Global `--json` flag: pass it anywhere in the args and every command prints
+  its result as one compact JSON line (the daemon's own response) instead of
+  the human text rendering. `launch`/`trace` emit the stop/trace payload or the
+  build error the same way. Schema documented in `docs/json-schema.md`.
+- Outcome taxonomy: every response now carries a top-level `status` field
+  classifying the result as exactly one of `ok | user_error | target_error |
+  build_error | debug_adapter_error | timeout | no_session |
+  no_new_information` (the last is reserved, not produced yet). `ok:bool`
+  stays for back-compat. Derived in the daemon; client-side failures (cargo
+  build/target errors, bad args, daemon not responding) use the same envelope.
+- MCP: every `tools/call` result carries the daemon's `status` end-to-end in
+  `_meta` as `rdbg/status`, so MCP callers can score outcomes without parsing
+  the text content.
+
 ## 0.3.0
 
 - `--lib` for `rdbg launch` / `rdbg trace` (MCP `debug_launch` / `debug_trace`

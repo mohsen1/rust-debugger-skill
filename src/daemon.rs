@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::lsp::Lsp;
 use crate::session::{Session, Stop};
-use crate::util::abs;
+use crate::util::{abs, classify_error};
 
 const IDLE_SHUTDOWN: Duration = Duration::from_secs(30 * 60);
 
@@ -154,7 +154,23 @@ impl Daemon {
         }
     }
 
+    /// Dispatch one request and stamp the response with a `status` outcome
+    /// (`ok | user_error | target_error | build_error | debug_adapter_error |
+    /// timeout | no_session | no_new_information`) so every result is
+    /// machine-scorable. `ok:bool` stays alongside it for back-compat.
     fn dispatch(&mut self, req: &Value) -> (Value, bool) {
+        let (mut resp, shutdown) = self.dispatch_inner(req);
+        if resp.get("status").is_none() {
+            resp["status"] = json!(if resp["ok"].as_bool().unwrap_or(false) {
+                "ok"
+            } else {
+                classify_error(resp["error"].as_str().unwrap_or(""))
+            });
+        }
+        (resp, shutdown)
+    }
+
+    fn dispatch_inner(&mut self, req: &Value) -> (Value, bool) {
         let cmd = req["cmd"].as_str().unwrap_or("");
         match cmd {
             "ping" => return (json!({"ok": true}), false),

@@ -1,6 +1,10 @@
 //! MCP server: exposes the debugger to MCP clients (Claude Code, Codex) over
 //! newline-delimited JSON-RPC on stdio. Each tool call ensures the per-project
 //! daemon is up and forwards to it — the same daemon the CLI drives.
+//!
+//! Every tool result carries the daemon's `status` outcome (the taxonomy in
+//! docs/json-schema.md) end-to-end in the result's `_meta` object as
+//! `rdbg/status`, so MCP callers can score outcomes without parsing the text.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -8,7 +12,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::client::{build_target, ensure_daemon, request, ws_root};
+use crate::client::{build_target, ensure_daemon, request, run_batch_full, ws_root};
+use crate::util::classify_build_error;
 
 const PROTOCOL: &str = "2024-11-05";
 
@@ -95,26 +100,29 @@ fn str_args(a: &Value) -> Vec<String> {
 }
 
 /// Build (or take) the target for debug_launch/debug_trace. Returns the program
-/// and its args (the `--test`→lib fallback may add the test-name filter).
-fn resolve_program(a: &Value) -> Result<(PathBuf, Vec<String>), String> {
+/// and its args (the `--test`→lib fallback may add the test-name filter), or
+/// `(message, status)` — `status` distinguishes a bad call (`user_error`), a
+/// missing cargo target (`target_error`), and a compile failure (`build_error`).
+fn resolve_program(a: &Value) -> Result<(PathBuf, Vec<String>), (String, &'static str)> {
     let mut args = str_args(a);
     if let Some(c) = a["cargo"].as_str() {
         let program = build_target(&PathBuf::from(c), a["bin"].as_str(), a["test"].as_str(),
-            a["lib"].as_bool().unwrap_or(false), &mut args)?;
+            a["lib"].as_bool().unwrap_or(false), &mut args)
+            .map_err(|e| { let s = classify_build_error(&e); (e, s) })?;
         Ok((program, args))
     } else if let Some(bp) = a["bin_path"].as_str() {
-        Ok((PathBuf::from(bp).canonicalize().map_err(|_| format!(
-            "bin_path {bp:?} does not exist — build it first, or pass `cargo` (project dir) to build and debug in one step"))?, args))
+        Ok((PathBuf::from(bp).canonicalize().map_err(|_| (format!(
+            "bin_path {bp:?} does not exist — build it first, or pass `cargo` (project dir) to build and debug in one step"), "user_error"))?, args))
     } else {
-        Err("provide either `cargo` (project dir, with optional `bin`/`test`/`lib:true` target) or `bin_path`".into())
+        Err(("provide either `cargo` (project dir, with optional `bin`/`test`/`lib:true` target) or `bin_path`".into(), "user_error"))
     }
 }
 
 /// Launch + run through all hits + return the trace, in one tool call.
-fn trace_call(ws: &Path, a: &Value) -> (String, bool) {
+fn trace_call(ws: &Path, a: &Value) -> (String, bool, String) {
     let (program, args) = match resolve_program(a) {
         Ok(v) => v,
-        Err(e) => return (format!("error: {e}"), true),
+        Err((e, status)) => return (format!("error: {e}"), true, status.to_string()),
     };
     let bps: Vec<Value> = a["breakpoints"].as_array().map(|arr| arr.iter().filter_map(|b| b.as_str()).map(|b| {
         let (f, l) = parse_loc(b);
@@ -127,32 +135,37 @@ fn trace_call(ws: &Path, a: &Value) -> (String, bool) {
         "breakpoints": bps, "fn_breaks": [], "panic": false}), Duration::from_secs(300));
     match launch {
         Some(v) if v["ok"].as_bool().unwrap_or(false) => {}
-        Some(v) => return (format!("launch failed: {}", v["error"].as_str().unwrap_or("?")), true),
-        None => return ("the rdbg daemon did not respond".into(), true),
+        Some(v) => return (format!("launch failed: {}", v["error"].as_str().unwrap_or("?")), true,
+                           v["status"].as_str().unwrap_or("debug_adapter_error").to_string()),
+        None => return ("the rdbg daemon did not respond".into(), true, "timeout".to_string()),
     }
     let t = request(ws, &json!({"cmd": "trace", "captures": a["capture"].as_array().cloned().unwrap_or_default(),
         "max": a["max"].as_i64().unwrap_or(50)}), Duration::from_secs(300));
     match t {
         Some(tv) if tv["ok"].as_bool().unwrap_or(false) =>
-            (format!("trace: {} hit(s)\n{}", tv["hits"].as_i64().unwrap_or(0), tv["trace"].as_str().unwrap_or("")), false),
-        _ => ("trace failed".into(), true),
+            (format!("trace: {} hit(s)\n{}", tv["hits"].as_i64().unwrap_or(0), tv["trace"].as_str().unwrap_or("")), false, "ok".to_string()),
+        Some(tv) => ("trace failed".into(), true, tv["status"].as_str().unwrap_or("debug_adapter_error").to_string()),
+        None => ("trace failed".into(), true, "timeout".to_string()),
     }
 }
 
-/// Map a tool call to a daemon request; returns (text, is_error).
-fn call(ws: &Path, name: &str, a: &Value) -> (String, bool) {
+/// Map a tool call to a daemon request; returns (text, is_error, status) —
+/// `status` is the daemon's outcome classification, threaded through so the
+/// MCP result can carry it.
+fn call(ws: &Path, name: &str, a: &Value) -> (String, bool, String) {
     if name == "debug_trace" {
         return trace_call(ws, a);
     }
     if name == "debug_do" {
         ensure_daemon(ws);
-        return crate::client::run_batch(ws, a["commands"].as_str().unwrap_or(""));
+        let (text, is_error, value) = run_batch_full(ws, a["commands"].as_str().unwrap_or(""));
+        return (text, is_error, value["status"].as_str().unwrap_or("ok").to_string());
     }
     let payload = match name {
         "debug_launch" => {
             let (program, args) = match resolve_program(a) {
                 Ok(v) => v,
-                Err(e) => return (format!("error: {e}"), true),
+                Err((e, status)) => return (format!("error: {e}"), true, status.to_string()),
             };
             let bps: Vec<Value> = a["breakpoints"].as_array().map(|arr| arr.iter().filter_map(|b| b.as_str()).map(|b| {
                 let (f, l) = parse_loc(b);
@@ -203,37 +216,42 @@ fn call(ws: &Path, name: &str, a: &Value) -> (String, bool) {
         "debug_hover" => json!({"cmd": "hover", "file": a["file"].as_str().unwrap_or(""), "line": a["line"].as_i64().unwrap_or(0), "col": a["col"].as_i64().unwrap_or(0)}),
         "debug_references" => json!({"cmd": "refs", "file": a["file"].as_str().unwrap_or(""), "line": a["line"].as_i64().unwrap_or(0), "col": a["col"].as_i64().unwrap_or(0)}),
         "debug_stop" => json!({"cmd": "stop"}),
-        _ => return (format!("unknown tool {name:?}"), true),
+        _ => return (format!("unknown tool {name:?}"), true, "user_error".to_string()),
     };
     ensure_daemon(ws);
     match request(ws, &payload, Duration::from_secs(300)) {
-        None => ("the rdbg daemon did not respond (call debug_launch first?)".into(), true),
+        None => ("the rdbg daemon did not respond (call debug_launch first?)".into(), true, "timeout".to_string()),
         Some(resp) => format_resp(&resp),
     }
 }
 
-fn format_resp(resp: &Value) -> (String, bool) {
+fn format_resp(resp: &Value) -> (String, bool, String) {
+    // the daemon stamps every response with `status`; derive one only for
+    // responses from an older daemon
+    let status = resp["status"].as_str()
+        .unwrap_or(if resp["ok"].as_bool().unwrap_or(true) { "ok" } else { "user_error" })
+        .to_string();
     if !resp["ok"].as_bool().unwrap_or(true) {
-        return (format!("error: {}", resp["error"].as_str().unwrap_or("unknown")), true);
+        return (format!("error: {}", resp["error"].as_str().unwrap_or("unknown")), true, status);
     }
     for key in ["stop", "vars", "value", "bt", "source", "threads", "breakpoints", "hover", "watches"] {
         let v = &resp[key];
         if v.is_string() && !v.as_str().unwrap().is_empty() {
-            return (v.as_str().unwrap().to_string(), false);
+            return (v.as_str().unwrap().to_string(), false, status);
         }
         if v.is_object() {
-            return (serde_json::to_string_pretty(v).unwrap_or_default(), false);
+            return (serde_json::to_string_pretty(v).unwrap_or_default(), false, status);
         }
     }
     if let Some(syms) = resp["symbols"].as_array() {
         let text = syms.iter().map(|s| format!("{}  {}:{}", s["name"].as_str().unwrap_or("?"), s["file"].as_str().unwrap_or("?"), s["line"])).collect::<Vec<_>>().join("\n");
-        return (if text.is_empty() { "(no matches)".into() } else { text }, false);
+        return (if text.is_empty() { "(no matches)".into() } else { text }, false, status);
     }
     if let Some(locs) = resp["locations"].as_array() {
         let text = locs.iter().map(|l| format!("{}:{}:{}", l["file"].as_str().unwrap_or("?"), l["line"], l["col"])).collect::<Vec<_>>().join("\n");
-        return (if text.is_empty() { "(no results)".into() } else { text }, false);
+        return (if text.is_empty() { "(no results)".into() } else { text }, false, status);
     }
-    ("ok".into(), false)
+    ("ok".into(), false, status)
 }
 
 fn send(v: Value) {
@@ -270,8 +288,11 @@ pub fn main() -> i32 {
             "tools/call" => {
                 let name = msg["params"]["name"].as_str().unwrap_or("");
                 let args = &msg["params"]["arguments"];
-                let (text, is_error) = call(&ws, name, args);
-                reply(id, json!({"content": [{"type": "text", "text": text}], "isError": is_error}));
+                let (text, is_error, status) = call(&ws, name, args);
+                // `_meta.rdbg/status` preserves the daemon's outcome taxonomy
+                // end-to-end for machine scoring (see docs/json-schema.md)
+                reply(id, json!({"content": [{"type": "text", "text": text}], "isError": is_error,
+                                 "_meta": {"rdbg/status": status}}));
             }
             "shutdown" => reply(id, json!({})),
             _ => {

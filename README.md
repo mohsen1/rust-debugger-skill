@@ -119,6 +119,24 @@ args = ["mcp"]
 
 The server picks up the project from the directory it starts in.
 
+## Machine-readable output
+
+Pass `--json` (anywhere in the args) and every command prints its result as one
+compact JSON line with a `status` field classifying the outcome — `ok`,
+`user_error`, `target_error`, `build_error`, `debug_adapter_error`, `timeout`,
+`no_session`, or `no_new_information` (reserved) — so results can be scored
+automatically (evals, RL environments, scripts):
+
+```sh
+$ rdbg --json launch --cargo . --lib --break src/lib.rs:37 -- my_test
+{"ok":true,"status":"ok","stop":{...}}
+$ rdbg --json launch --cargo . --test nope -- x
+{"ok":false,"status":"target_error","error":"no integration test target 'nope' — ..."}
+```
+
+MCP tool results carry the same `status` in `_meta` (`rdbg/status`). The full
+per-command schema is in [docs/json-schema.md](docs/json-schema.md).
+
 ## How it works
 
 A per-project daemon holds one paused `lldb-dap` session (with the Rust value
