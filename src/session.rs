@@ -768,8 +768,17 @@ impl Session {
         let Some(f) = self.frame() else { return "(not stopped)".into() };
         let resp = self.dap.request_soft("evaluate", json!({"expression": expr, "frameId": f.id, "context": "hover"}), Duration::from_secs(15));
         if !resp["success"].as_bool().unwrap_or(false) {
-            let m = resp["message"].as_str().unwrap_or("error");
-            return format!("(cannot evaluate {expr:?}: {m})");
+            // The fallback evaluator (lldb-dap) is C++-based and rejects Rust syntax —
+            // tuple `.0`, `.` on a pointer (wants `->`), `==`, method calls, expressions.
+            // Redirect the agent to what `eval` can do instead of leaking the C++ error.
+            let exp = expr.contains("==") || expr.contains("!=") || expr.contains("&&")
+                || expr.contains("||") || expr.contains('(') || expr.contains("->");
+            let hint = if exp {
+                "eval takes a variable PATH (e.g. `source.params[0].ty`), not an expression, comparison, or method call — break where the value is computed and inspect its inputs. Install `codelldb` on PATH for full Rust expression eval."
+            } else {
+                "not a resolvable path in this frame — run `rdbg vars` to see what's in scope (it may be a computed value, not a local). `codelldb` on PATH adds full Rust expression eval."
+            };
+            return format!("(cannot evaluate {expr:?}: {hint})");
         }
         let typ = short_type(resp["body"]["type"].as_str().unwrap_or(""));
         let result = resp["body"]["result"].as_str().unwrap_or("");

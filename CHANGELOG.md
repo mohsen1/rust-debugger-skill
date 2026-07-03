@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `eval` now redirects instead of leaking lldb's C++ error when handed a Rust
+  expression it can't resolve (a comparison `==`, tuple `.0`, `->`, method call): it
+  says eval takes variable PATHS, points to `rdbg vars`, and notes that `codelldb` on
+  PATH adds full Rust expression eval. `install.sh` now recommends codelldb. (On a real
+  tsz bug, an agent burned ~10 calls fighting the C++ evaluator, then fell back to
+  `eprintln` — the loop rdbg exists to replace.)
 - When a run ends in program exit, `launch` / `continue` / `do` now report which
   breakpoints **did not fire** — distinguishing `NOT BOUND` (the name/path didn't
   resolve) from `bound, 0 hits` (the code never ran that line/fn on this input).

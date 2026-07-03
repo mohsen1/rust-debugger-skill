@@ -39,4 +39,8 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "rdbg: add $dir to your PATH" >&2 ;;
 esac
-echo "rdbg: also needs rust-analyzer (rustup component add rust-analyzer) and lldb-dap" >&2
+echo "rdbg: also needs rust-analyzer (rustup component add rust-analyzer) and a debug adapter." >&2
+echo "  Recommended: codelldb — it gives full Rust expression eval (comparisons, tuple .0," >&2
+echo "  method calls). Install the VS Code CodeLLDB extension or a release from" >&2
+echo "  github.com/vadimcn/codelldb, and put its 'codelldb' on PATH. Without it, rdbg falls" >&2
+echo "  back to lldb-dap (Xcode CLT / 'apt install lldb'), which does variable-path eval only." >&2
