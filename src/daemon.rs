@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::lsp::Lsp;
-use crate::session::{parse_predicate, Session, Stop, UntilOutcome};
-use crate::util::{abs, classify_error};
+use crate::session::{first_user_frame, parse_predicate, Session, Stop, UntilOutcome};
+use crate::util::{abs, classify_error, extract_panic_message};
 
 const IDLE_SHUTDOWN: Duration = Duration::from_secs(30 * 60);
 
@@ -108,6 +108,18 @@ fn format_trace(hits: &[crate::session::TraceHit]) -> String {
     }).collect::<Vec<_>>().join("\n")
 }
 
+/// The last `n` bytes of program output, snapped to a char boundary.
+fn tail(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        return s.to_string();
+    }
+    let mut i = s.len() - n;
+    while !s.is_char_boundary(i) {
+        i += 1;
+    }
+    s[i..].to_string()
+}
+
 /// Read-only stop summary (frame + source + watches).
 fn summarize(s: &Session, stop: &Stop) -> Value {
     if stop.exited {
@@ -183,6 +195,7 @@ impl Daemon {
                 }), false);
             }
             "launch" => return (self.cmd_launch(req), false),
+            "panic_triage" => return (self.cmd_panic_triage(req), false),
             _ => {}
         }
 
@@ -273,6 +286,96 @@ impl Daemon {
         self.session = Some(session);
         let summary = self.stop_summary(stop);
         json!({"ok": true, "stop": summary})
+    }
+
+    /// One-shot panic triage: launch with a panic breakpoint, run to the
+    /// panic, and bundle the panic message, the first USER frame (std/core
+    /// internals skipped) with its arguments and locals, and a short backtrace
+    /// into a single response. If the program exits without panicking, says so
+    /// (`panicked: false`). The session stays paused inside the panic (frames
+    /// intact) unless the program ran to exit.
+    fn cmd_panic_triage(&mut self, req: &Value) -> Value {
+        if let Some(mut old) = self.session.take() {
+            old.disconnect();
+        }
+        let program = req["program"].as_str().unwrap_or("");
+        let cwd = req["cwd"].as_str();
+        let args: Vec<String> = req["args"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        let mut session = match Session::new(program, cwd, args) {
+            Ok(s) => s,
+            Err(e) => return json!({"ok": false, "error": e}),
+        };
+        session.add_panic_bp();
+        if let Err(e) = session.launch(false) {
+            return json!({"ok": false, "error": e});
+        }
+        let stop = match session.run() {
+            Ok(s) => s,
+            Err(e) => return json!({"ok": false, "error": e}),
+        };
+        if stop.exited {
+            // no panic — the only breakpoints were the panic symbols
+            let out = session.output.concat();
+            return json!({"ok": true, "panicked": false, "exit_code": stop.exit_code,
+                          "output": tail(&out, 2000)});
+        }
+        // paused where the panic is raised — land on the first user frame
+        let idx = first_user_frame(&stop.frames).unwrap_or(0);
+        session.select_frame(idx);
+        let frame = stop.frames.get(idx)
+            .map(|f| format!("{}  {}:{}", f.name, f.file, f.line))
+            .unwrap_or_else(|| "?".into());
+        let vars = session.locals_text(3);
+        let source = session.source_around(4);
+        let bt = session.backtrace_text();
+        // The panic breakpoint fires *before* the hook prints `panicked at ...`.
+        // Nudge the program forward (through the remaining panic symbols — the
+        // stack below the user frame is unchanged) until the message shows up
+        // in the output or the process exits. libtest targets (--nocapture)
+        // flush it while still paused; plain binaries often only flush at exit,
+        // so a binary's triage usually ends with the program exited.
+        let mut exited = false;
+        let mut exit_code = None;
+        let mut message = extract_panic_message(&session.output.concat());
+        for _ in 0..4 {
+            if message.is_some() {
+                break;
+            }
+            if session.wait_output_contains("panicked at", Duration::from_millis(700)) {
+                message = extract_panic_message(&session.output.concat());
+                break;
+            }
+            match session.cont() {
+                Ok(s) if s.exited => {
+                    exited = true;
+                    exit_code = s.exit_code;
+                    // the final output flush can trail the exited event
+                    session.wait_output_contains("panicked at", Duration::from_millis(700));
+                    message = extract_panic_message(&session.output.concat());
+                    break;
+                }
+                Ok(_) => message = extract_panic_message(&session.output.concat()),
+                Err(_) => break,
+            }
+        }
+        let out = session.output.concat();
+        if exited {
+            session.disconnect();
+        } else {
+            // keep the paused session usable: reselect the user frame in the
+            // (possibly deeper) current stop so vars/frame/bt pick up there
+            let i = session.last_stop.as_ref().map(|s| first_user_frame(&s.frames).unwrap_or(0)).unwrap_or(0);
+            session.select_frame(i);
+            self.session = Some(session);
+        }
+        json!({
+            "ok": true, "panicked": true,
+            "message": message,
+            "frame": frame, "frame_index": idx,
+            "source": source, "vars": vars, "bt": bt,
+            "exited": exited, "exit_code": exit_code,
+            "output": tail(&out, 1500),
+        })
     }
 
     fn cmd_nav(&mut self, cmd: &str, req: &Value) -> Value {

@@ -26,6 +26,12 @@ TRACE (one call instead of break→inspect→continue×N)
   rdbg trace --cargo . --lib --break src/lib.rs:42 --capture a,b -- my_test
     runs through every hit, captures the paths at each, returns a table
 
+DEBUG (one-shot panic triage: one call instead of launch→bt→frame→vars)
+  rdbg debug --cargo . [--bin <t>|--test <t>|--lib] --panic [-- ARGS]
+    runs to the panic and returns the panic message, the first USER stack
+    frame (std/core internals skipped) with its arguments and locals, and a
+    short backtrace; says so plainly if the program exits without panicking
+
 BREAKPOINTS (set or change any time, even while paused)
   rdbg break f.rs:L [--if <expr>] [--hit <N>] [--log <msg>]
   rdbg break --fn <name>        break entering a function
@@ -378,6 +384,45 @@ fn fmt_stop(stop: &Value) -> String {
     lines.join("\n")
 }
 
+/// Render a `panic_triage` daemon response as text (shared by the CLI `debug`
+/// verb and the MCP `debug_panic` tool).
+pub(crate) fn fmt_triage(v: &Value) -> String {
+    let code = |c: &Value| c.as_i64().map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+    if !v["panicked"].as_bool().unwrap_or(false) {
+        let mut out = format!(">>> no panic — program exited (code {})", code(&v["exit_code"]));
+        if let Some(o) = v["output"].as_str() {
+            if !o.is_empty() {
+                out.push_str(&format!("\n--- program output ---\n{}", o.trim_end()));
+            }
+        }
+        return out;
+    }
+    let mut lines = vec![match v["message"].as_str() {
+        Some(m) if !m.is_empty() => format!(">>> PANIC\n{m}"),
+        _ => ">>> PANIC (message not captured — see the program output)".to_string(),
+    }];
+    lines.push(format!("\nfirst user frame: #{} {}",
+        v["frame_index"].as_i64().unwrap_or(0), v["frame"].as_str().unwrap_or("?")));
+    if let Some(src) = v["source"].as_str() {
+        if !src.is_empty() {
+            lines.push(src.to_string());
+        }
+    }
+    lines.push("locals:".to_string());
+    lines.push(v["vars"].as_str().unwrap_or("  (no locals)").to_string());
+    if let Some(bt) = v["bt"].as_str() {
+        if !bt.is_empty() {
+            lines.push(format!("backtrace:\n{bt}"));
+        }
+    }
+    if v["exited"].as_bool().unwrap_or(false) {
+        lines.push(format!(">>> program exited (code {})", code(&v["exit_code"])));
+    } else {
+        lines.push("(paused inside the panic — vars/eval/frame/bt still work; `rdbg stop` ends the session)".to_string());
+    }
+    lines.join("\n")
+}
+
 fn fmt_result_stop(r: &Option<Value>) -> String {
     match r {
         Some(v) if v["ok"].as_bool().unwrap_or(false) => fmt_stop(&v["stop"]),
@@ -435,8 +480,9 @@ pub fn main(args: &[String]) -> i32 {
     ensure_daemon(&ws);
 
     match cmd {
-        "launch" => do_launch(&ws, rest, false, json_mode),
-        "trace" => do_launch(&ws, rest, true, json_mode),
+        "launch" => do_launch(&ws, rest, Verb::Launch, json_mode),
+        "trace" => do_launch(&ws, rest, Verb::Trace, json_mode),
+        "debug" => do_launch(&ws, rest, Verb::Debug, json_mode),
         "do" => {
             // run several subcommands in one call: `rdbg do 'break f:L; continue; vars'`
             let (text, had_error, value) = run_batch_full(&ws, &rest.join(" "));
@@ -761,8 +807,18 @@ fn fmt_field(resp: &Option<Value>, field: &str) -> String {
     }
 }
 
-fn do_launch(ws: &Path, rest: &[String], trace_mode: bool, json_mode: bool) -> i32 {
-    let verb = if trace_mode { "trace" } else { "launch" };
+/// Which launching verb `do_launch` is serving — they share all the
+/// cargo/target/args handling and differ only in what runs after the build.
+#[derive(Clone, Copy, PartialEq)]
+enum Verb {
+    Launch,
+    Trace,
+    Debug,
+}
+
+fn do_launch(ws: &Path, rest: &[String], mode: Verb, json_mode: bool) -> i32 {
+    let trace_mode = mode == Verb::Trace;
+    let verb = match mode { Verb::Launch => "launch", Verb::Trace => "trace", Verb::Debug => "debug" };
     // emit a failure in the active mode: one JSON line on stdout, or text on stderr
     let fail = |status: &str, msg: &str, code: i32| -> i32 {
         if json_mode {
@@ -772,13 +828,21 @@ fn do_launch(ws: &Path, rest: &[String], trace_mode: bool, json_mode: bool) -> i
         }
         code
     };
-    let usage = format!(
+    let usage = if mode == Verb::Debug {
+        "usage: rdbg debug --cargo <dir> [--bin <name> | --test <name> | --lib] --panic [-- <program args / test-name filter>]\n       \
+         rdbg debug --bin-path <path> --panic\n  \
+         runs to the panic and returns the panic message, the first USER stack frame\n  \
+         (std/core internals skipped) with its arguments and locals, and a short\n  \
+         backtrace — one call instead of launch→bt→frame→vars".to_string()
+    } else {
+        format!(
         "usage: rdbg {verb} --cargo <dir> [--bin <name> | --test <name> | --lib] --break <file.rs:line> \
          [--break-fn <fn>] [--panic]{} [-- <program args / test-name filter>]\n       \
          rdbg {verb} --bin-path <path> --break <file.rs:line>\n  \
          --bin <name>   a binary target        --test <name>  an integration test (tests/<name>.rs)\n  \
          --lib          the library's own unit tests (#[cfg(test)] mod tests); pass the test name after --",
-        if trace_mode { " [--capture a,b] [--max N]" } else { "" });
+        if trace_mode { " [--capture a,b] [--max N]" } else { "" })
+    };
     let (mut cargo, mut bin_path, mut bin, mut test): (Option<String>, Option<String>, Option<String>, Option<String>) = (None, None, None, None);
     let mut lib = false;
     let mut breaks: Vec<String> = vec![];
@@ -807,7 +871,15 @@ fn do_launch(ws: &Path, rest: &[String], trace_mode: bool, json_mode: bool) -> i
     if [bin.is_some(), test.is_some(), lib].iter().filter(|b| **b).count() > 1 {
         return fail("user_error", "pick one target — --bin <name>, --test <name> (tests/<name>.rs), or --lib (the library's #[cfg(test)] unit tests)", 2);
     }
-    if breaks.is_empty() && fn_breaks.is_empty() && !panic {
+    if mode == Verb::Debug {
+        if !panic {
+            return fail("user_error", &format!("debug needs --panic (one-shot panic triage)\n{usage}"), 2);
+        }
+        if !breaks.is_empty() || !fn_breaks.is_empty() {
+            return fail("user_error",
+                "debug --panic runs straight to the panic — drop --break/--break-fn (use launch or trace to stop at breakpoints)", 2);
+        }
+    } else if breaks.is_empty() && fn_breaks.is_empty() && !panic {
         return fail("user_error", &format!(
             "{verb} needs at least one --break <file.rs:line>, --break-fn <name>, or --panic\n  \
              e.g.  rdbg {verb} --cargo . --lib --break src/lib.rs:42 -- my_test"), 2);
@@ -835,6 +907,28 @@ fn do_launch(ws: &Path, rest: &[String], trace_mode: bool, json_mode: bool) -> i
             Ok((f, l)) => bps.push(json!({"file": f, "line": l})),
             Err(e) => return fail("user_error", &e, 2),
         }
+    }
+    if mode == Verb::Debug {
+        // libtest captures panic output by default; --nocapture prints the
+        // `panicked at ...` line as it happens so the bundle can include it
+        if (lib || test.is_some()) && !args.iter().any(|a| a == "--nocapture") {
+            args.push("--nocapture".to_string());
+        }
+        eprintln!("debugging {} (running to the panic)",
+            program.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
+        let v = jresp(request(ws, &json!({"cmd": "panic_triage", "program": program.to_string_lossy(),
+            "cwd": program.parent().map(|p| p.to_string_lossy().to_string()),
+            "args": args}), Duration::from_secs(300)));
+        if json_mode {
+            println!("{v}");
+            return if v["ok"].as_bool().unwrap_or(false) { 0 } else { 1 };
+        }
+        if !v["ok"].as_bool().unwrap_or(false) {
+            eprintln!("debug failed: {}", v["error"].as_str().unwrap_or("unknown"));
+            return 1;
+        }
+        println!("{}", fmt_triage(&v));
+        return 0;
     }
     eprintln!("debugging {}", program.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
     let v = jresp(request(ws, &json!({"cmd": "launch", "program": program.to_string_lossy(),

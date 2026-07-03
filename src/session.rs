@@ -72,6 +72,40 @@ impl Stop {
     }
 }
 
+/// The index of the first frame that belongs to the user's own code: skips
+/// the panic/backtrace plumbing and the Rust library (`std::` / `core::` /
+/// `alloc::` symbols, `rust_panic`, `panic_fmt`, `__rust_*`, `begin_panic`,
+/// frames whose source lives in the toolchain's `library/` tree), and prefers
+/// frames outside `~/.cargo/registry` so a panic raised inside a dependency
+/// still lands on the caller's own crate first.
+pub fn first_user_frame(frames: &[Frame]) -> Option<usize> {
+    let candidate = |f: &&Frame| !panic_machinery(f) && !rust_library(f);
+    frames.iter().position(|f| candidate(&f) && !cargo_registry(f))
+        .or_else(|| frames.iter().position(|f| candidate(&f)))
+}
+
+/// A frame inside the panic/unwind/backtrace machinery, by symbol name.
+fn panic_machinery(f: &Frame) -> bool {
+    // demangled generics render as `<core::panic::panic_info::PanicInfo>::new`
+    let n = f.name.trim_start_matches('<');
+    n.starts_with("std::") || n.starts_with("core::") || n.starts_with("alloc::")
+        || n.starts_with("__rust") || n == "rust_panic" || n.starts_with("rust_begin_unwind")
+        || n.contains("panicking") || n.contains("panic_fmt") || n.contains("begin_panic")
+        || n.contains("lang_start") || n.contains("::backtrace")
+}
+
+/// A frame whose source lives in the Rust toolchain (std/core/alloc/test —
+/// debug info records these as `/rustc/<hash>/library/...`).
+fn rust_library(f: &Frame) -> bool {
+    f.path.contains("/rustc/") || f.path.contains("/library/std/")
+        || f.path.contains("/library/core/") || f.path.contains("/library/alloc/")
+        || f.path.contains("/library/test/")
+}
+
+fn cargo_registry(f: &Frame) -> bool {
+    f.path.contains("/.cargo/registry/") || f.path.contains("/.cargo/git/")
+}
+
 /// One breakpoint hit captured during a `trace` run.
 pub struct TraceHit {
     pub func: String,
@@ -401,6 +435,30 @@ impl Session {
             if ev["event"] == "output" {
                 if let Some(o) = ev["body"]["output"].as_str() {
                     self.output.push(o.to_string());
+                }
+            }
+        }
+    }
+
+    /// Collect output events for up to `timeout`, returning early as soon as
+    /// the captured program output contains `needle` (output captured before
+    /// the call counts too). Used by panic triage: the panic breakpoint fires
+    /// *before* the hook prints `panicked at ...`, so the message trails the
+    /// stop event.
+    pub fn wait_output_contains(&mut self, needle: &str, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.output.concat().contains(needle) {
+                return true;
+            }
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            if let Some(ev) = self.dap.poll_event(remaining.min(Duration::from_millis(100))) {
+                if ev["event"] == "output" {
+                    if let Some(o) = ev["body"]["output"].as_str() {
+                        self.output.push(o.to_string());
+                    }
                 }
             }
         }
@@ -960,10 +1018,14 @@ pub fn predicate_holds(observed: &str, op: &str, rhs: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_predicate, predicate_holds, Predicate};
+    use super::{first_user_frame, parse_predicate, predicate_holds, Frame, Predicate};
 
     fn pred(path: &str, op: &'static str, rhs: &str) -> Predicate {
         Predicate { path: path.into(), op, rhs: rhs.into() }
+    }
+
+    fn frame(name: &str, path: &str) -> Frame {
+        Frame { id: 0, name: name.into(), file: "f".into(), line: 1, path: path.into() }
     }
 
     #[test]
@@ -1006,6 +1068,53 @@ mod tests {
         // evaluation failures never hold
         assert!(!predicate_holds("(cannot evaluate \"i\": error)", "==", "5"));
         assert!(!predicate_holds("(not stopped)", "!=", "5"));
+    }
+
+    #[test]
+    fn skips_the_panic_machinery_to_the_users_frame() {
+        let frames = [
+            frame("core::panicking::panic_bounds_check", "/rustc/abc123/library/core/src/panicking.rs"),
+            frame("rpncalc::tests::boom", "/home/me/rpncalc/src/lib.rs"),
+            frame("core::ops::function::FnOnce::call_once", "/rustc/abc123/library/core/src/ops/function.rs"),
+        ];
+        assert_eq!(first_user_frame(&frames), Some(1));
+    }
+
+    #[test]
+    fn skips_every_panic_entry_point_shape() {
+        for (name, path) in [
+            ("rust_panic", "/rustc/abc/library/std/src/panicking.rs"),
+            ("core::panicking::panic_fmt", "/rustc/abc/library/core/src/panicking.rs"),
+            ("std::panicking::begin_panic_handler", "/rustc/abc/library/std/src/panicking.rs"),
+            ("core::panicking::panic", "/rustc/abc/library/core/src/panicking.rs"),
+            ("core::option::Option<T>::unwrap", "/rustc/abc/library/core/src/option.rs"),
+            ("__rust_try", ""),
+            ("std::sys::backtrace::__rust_begin_short_backtrace", "/rustc/abc/library/std/src/sys/backtrace.rs"),
+        ] {
+            let frames = [frame(name, path), frame("app::main", "/home/me/app/src/main.rs")];
+            assert_eq!(first_user_frame(&frames), Some(1), "should skip {name}");
+        }
+    }
+
+    #[test]
+    fn prefers_the_users_crate_over_a_dependency_frame() {
+        let frames = [
+            frame("core::panicking::panic", "/rustc/abc/library/core/src/panicking.rs"),
+            frame("serde_json::de::from_str", "/home/me/.cargo/registry/src/idx/serde_json-1.0/src/de.rs"),
+            frame("app::load", "/home/me/app/src/main.rs"),
+        ];
+        assert_eq!(first_user_frame(&frames), Some(2));
+        // ... but a dependency frame beats no user frame at all
+        assert_eq!(first_user_frame(&frames[..2]), Some(1));
+    }
+
+    #[test]
+    fn all_library_frames_yields_none() {
+        let frames = [
+            frame("rust_panic", "/rustc/abc/library/std/src/panicking.rs"),
+            frame("std::rt::lang_start", "/rustc/abc/library/std/src/rt.rs"),
+        ];
+        assert_eq!(first_user_frame(&frames), None);
     }
 }
 

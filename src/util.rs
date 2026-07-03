@@ -80,6 +80,24 @@ pub fn classify_build_error(e: &str) -> &'static str {
     if is_target_error(e) { "target_error" } else { "build_error" }
 }
 
+/// Pull the panic report out of captured program output: the `panicked at ...`
+/// line plus the message lines after it (assert_eq! reports span several),
+/// stopping at the `note: run with RUST_BACKTRACE` hint, a backtrace, or a
+/// blank line. `None` until the panic hook has actually printed.
+pub fn extract_panic_message(output: &str) -> Option<String> {
+    let lines: Vec<&str> = output.lines().collect();
+    let start = lines.iter().position(|l| l.contains("panicked at"))?;
+    let mut msg = vec![lines[start].trim_end().to_string()];
+    for l in lines[start + 1..].iter().take(12) {
+        let t = l.trim_end();
+        if t.is_empty() || t.starts_with("note: run with") || t.starts_with("stack backtrace:") {
+            break;
+        }
+        msg.push(t.to_string());
+    }
+    Some(msg.join("\n"))
+}
+
 fn on_path(name: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -222,7 +240,26 @@ pub fn kill_group(_pid: u32) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_build_error, classify_error};
+    use super::{classify_build_error, classify_error, extract_panic_message};
+
+    #[test]
+    fn extracts_the_panic_report_from_program_output() {
+        // modern (1.72+) two-line format, with the note trimmed off
+        let out = "running 1 test\nthread 'tests::boom' panicked at src/lib.rs:6:23:\n\
+                   index out of bounds: the len is 3 but the index is 7\n\
+                   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+        assert_eq!(extract_panic_message(out).unwrap(),
+            "thread 'tests::boom' panicked at src/lib.rs:6:23:\nindex out of bounds: the len is 3 but the index is 7");
+        // multi-line assert_eq! report is kept whole
+        let out = "thread 'main' panicked at src/main.rs:2:5:\nassertion `left == right` failed\n  left: 1\n right: 2\n\ntail";
+        assert_eq!(extract_panic_message(out).unwrap(),
+            "thread 'main' panicked at src/main.rs:2:5:\nassertion `left == right` failed\n  left: 1\n right: 2");
+        // pre-1.72 single-line format still comes through
+        let out = "thread 'main' panicked at 'boom', src/main.rs:2:5\nnote: run with `RUST_BACKTRACE=1`...\n";
+        assert_eq!(extract_panic_message(out).unwrap(), "thread 'main' panicked at 'boom', src/main.rs:2:5");
+        // no panic yet
+        assert_eq!(extract_panic_message("running 1 test\n"), None);
+    }
 
     #[test]
     fn taxonomy_covers_the_known_error_shapes() {
