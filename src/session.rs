@@ -184,9 +184,15 @@ impl Session {
             "columnsStartAt1": true, "pathFormat": "path", "supportsVariableType": true,
             "supportsRunInTerminalRequest": false,
         }), T)?;
+        // Load debug symbols on demand instead of indexing them all up front. On a
+        // large repo (tsz: 1.7M lines) preloading can cost ~20 GB of RAM in the adapter;
+        // lazy loading keeps the footprint small at the price of a slightly slower first
+        // lookup — a good trade for debugging (we break at named spots, not scan globally).
+        let mut init = vec!["settings set target.preload-symbols false".to_string()];
+        init.extend(rust_formatter_commands());
         let seq = self.dap.send("launch", json!({
             "program": self.program, "cwd": self.cwd, "args": self.args,
-            "stopOnEntry": stop_on_entry, "initCommands": rust_formatter_commands(),
+            "stopOnEntry": stop_on_entry, "initCommands": init,
         }));
         self.dap.wait_event("initialized", T).ok_or("adapter never sent `initialized`")?;
         let paths: Vec<String> = self.line_bps.keys().cloned().collect();

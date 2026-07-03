@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- On launch, rdbg now loads debug symbols **lazily** (`settings set
+  target.preload-symbols false`) instead of indexing them all up front. On a large repo
+  (tsz: 1.7M lines) preloading can cost ~20 GB of RAM in the adapter; lazy loading keeps
+  the footprint small at the price of a slightly slower first symbol lookup. Verified
+  `--break-fn` (function breakpoints, which need a name→address lookup) still bind + hit.
+
 - SKILL now leads with a **"When to reach for it (and when not)"** triage: read first;
   launch only for a *runtime* question in code too large to follow by eye; skip the
   debugger for small/localized bugs, **missing-output** bugs (nothing to trace), and
