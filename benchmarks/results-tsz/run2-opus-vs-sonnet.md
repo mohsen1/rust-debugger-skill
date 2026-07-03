@@ -84,3 +84,21 @@ The agent now spends the debugger only where it pays: both former blowups drop t
 overhead, still fixed. (One run each — weak-model variance remains — but the pattern
 matches the intent: waste comes from hunting-launches and edit-churn, and the guidance
 suppresses both.)
+
+## Measurement caveats found while validating (important)
+
+1. **High single-run variance.** Re-running the same cell gives very different token
+   counts — Opus false-positive WITH landed at 3.44M, ~7.6M, and 10.18M across three
+   runs. So single-run with/without deltas (and single-run SKILL-change deltas) are noisy;
+   only *large* effects backed by behavioral shifts are trustworthy. The catastrophic-waste
+   fixes qualify (contravariant 17→1 launches; nominal 5→0 launches, 18→10 edits) — the
+   token drops there are real. Win-case deltas (e.g. false-positive) need multiple trials
+   to state reliably. Reliable "never waste across N cases" therefore needs a *multi-trial*
+   sweep, best run on Linux where the codelldb fixes below prevent OOM.
+2. **Token-metric bug (fixed).** A `claude -p` run can emit more than one `result` event
+   (a restart/nested run); the harness took the *last*, so one run logged 157K instead of
+   its true ~7.6M. Now takes the largest result event.
+3. **codelldb footprint (mitigated).** `target.preload-symbols false` on launch loads
+   symbols lazily (was ~20GB preloaded); `PR_SET_PDEATHSIG` reaps the adapter if the
+   daemon is hard-killed on Linux. Together these remove the OOM spiral that made the
+   macOS run unstable — enabling the multi-trial sweep above.
