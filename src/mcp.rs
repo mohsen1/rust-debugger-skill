@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::client::{build_target, ensure_daemon, request, run_batch_full, ws_root};
+use crate::client::{build_target, ensure_daemon, fmt_triage, request, run_batch_full, ws_root};
 use crate::util::classify_build_error;
 
 const PROTOCOL: &str = "2024-11-05";
@@ -38,6 +38,11 @@ fn tools() -> Vec<Value> {
                 "lib": {"type": "boolean"},
                 "bin_path": {"type": "string"}, "breakpoints": {"type": "array", "items": {"type": "string"}},
                 "capture": {"type": "array", "items": {"type": "string"}}, "max": {"type": "integer"},
+                "args": {"type": "array", "items": {"type": "string"}}}))}),
+        json!({"name": "debug_panic", "description":
+            "One-shot panic triage: build (or take) a Rust target, run it to the panic, and return in one call the panic message, the first USER stack frame (std/core internals skipped) with its arguments and locals, and a short backtrace — instead of launch/backtrace/frame/locals round-trips. Provide `cargo` (project dir, with optional `bin`/`test`/`lib:true`) or `bin_path`; for test targets pass the test-name filter in `args`. Says so plainly if the program exits without panicking; otherwise the session stays paused inside the panic for follow-up inspection.",
+            "inputSchema": obj(json!({"cargo": {"type": "string"}, "bin": {"type": "string"}, "test": {"type": "string"},
+                "lib": {"type": "boolean"}, "bin_path": {"type": "string"},
                 "args": {"type": "array", "items": {"type": "string"}}}))}),
         json!({"name": "debug_do", "description":
             "Run several rdbg subcommands in one call, separated by ';' (e.g. 'break src/main.rs:10; continue; vars; eval sum; bt'). Each is labeled with its command; stops at the first error or program exit. One tool call instead of a fixed break/inspect/continue recipe.",
@@ -149,12 +154,41 @@ fn trace_call(ws: &Path, a: &Value) -> (String, bool, String) {
     }
 }
 
+/// One-shot panic triage in one tool call: launch with a panic breakpoint,
+/// run to the panic, and return the bundled message + first user frame +
+/// locals + backtrace.
+fn panic_call(ws: &Path, a: &Value) -> (String, bool, String) {
+    let (program, mut args) = match resolve_program(a) {
+        Ok(v) => v,
+        Err((e, status)) => return (format!("error: {e}"), true, status.to_string()),
+    };
+    // libtest captures panic output by default; --nocapture prints the
+    // `panicked at ...` line as it happens so the bundle can include it
+    if (a["lib"].as_bool().unwrap_or(false) || a["test"].as_str().is_some())
+        && !args.iter().any(|x| x == "--nocapture") {
+        args.push("--nocapture".into());
+    }
+    ensure_daemon(ws);
+    match request(ws, &json!({"cmd": "panic_triage", "program": program.to_string_lossy(),
+        "cwd": program.parent().map(|p| p.to_string_lossy().to_string()),
+        "args": args}), Duration::from_secs(300)) {
+        None => ("the rdbg daemon did not respond".into(), true, "timeout".to_string()),
+        Some(v) if v["ok"].as_bool().unwrap_or(false) =>
+            (fmt_triage(&v), false, v["status"].as_str().unwrap_or("ok").to_string()),
+        Some(v) => (format!("error: {}", v["error"].as_str().unwrap_or("unknown")), true,
+                    v["status"].as_str().unwrap_or("debug_adapter_error").to_string()),
+    }
+}
+
 /// Map a tool call to a daemon request; returns (text, is_error, status) —
 /// `status` is the daemon's outcome classification, threaded through so the
 /// MCP result can carry it.
 fn call(ws: &Path, name: &str, a: &Value) -> (String, bool, String) {
     if name == "debug_trace" {
         return trace_call(ws, a);
+    }
+    if name == "debug_panic" {
+        return panic_call(ws, a);
     }
     if name == "debug_do" {
         ensure_daemon(ws);
