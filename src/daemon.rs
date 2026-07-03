@@ -30,6 +30,7 @@ fn state_dir(ws: &str) -> PathBuf {
 struct Daemon {
     session: Option<Session>,
     lsp: Option<Lsp>,
+    ws: String,
     last: Instant,
 }
 
@@ -51,19 +52,11 @@ pub fn serve(ws: &str) {
         json!({"socket": sock.to_string_lossy(), "pid": std::process::id()}).to_string(),
     );
 
-    let daemon = Arc::new(Mutex::new(Daemon { session: None, lsp: None, last: Instant::now() }));
+    let daemon = Arc::new(Mutex::new(Daemon { session: None, lsp: None, ws: ws.to_string(), last: Instant::now() }));
 
-    // warm rust-analyzer in the background
-    {
-        let d = Arc::clone(&daemon);
-        let ws = ws.clone();
-        std::thread::spawn(move || {
-            if let Ok(lsp) = Lsp::spawn(&ws) {
-                lsp.wait_ready(Duration::from_secs(180));
-                d.lock().unwrap().lsp = Some(lsp);
-            }
-        });
-    }
+    // rust-analyzer is started lazily on the first navigation command (where/def/
+    // hover/refs). Debug-only sessions never pay its indexing cost — which on a large
+    // repo (e.g. 1.7M lines) is minutes of CPU/RAM competing with the build and lldb.
     // idle shutdown
     {
         let d = Arc::clone(&daemon);
@@ -251,9 +244,17 @@ impl Daemon {
     }
 
     fn cmd_nav(&mut self, cmd: &str, req: &Value) -> Value {
-        let Some(lsp) = self.lsp.as_ref() else {
-            return json!({"ok": false, "error": "rust-analyzer is still warming up — retry in a moment"});
-        };
+        // lazily start rust-analyzer on first navigation — debug-only sessions skip it
+        if self.lsp.is_none() {
+            match Lsp::spawn(&self.ws) {
+                Ok(lsp) => {
+                    lsp.wait_ready(Duration::from_secs(180));
+                    self.lsp = Some(lsp);
+                }
+                Err(e) => return json!({"ok": false, "error": format!("rust-analyzer unavailable: {e}")}),
+            }
+        }
+        let lsp = self.lsp.as_ref().unwrap();
         match cmd {
             "where" => json!({"ok": true, "symbols": lsp.symbols(req["query"].as_str().unwrap_or(""))}),
             "def" | "refs" => {

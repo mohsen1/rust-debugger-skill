@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- rust-analyzer now starts **lazily** on the first navigation command (`where`/`def`/
+  `hover`/`refs`) instead of eagerly on every session. Debug-only sessions — the common
+  case — no longer pay its indexing cost, which on a large repo (~1.7M lines) is minutes
+  of background CPU/RAM competing with the build and lldb. (Every WITH run in the tsz
+  benchmark made 0 navigation calls yet paid the warm-up — a pure wall-time drain.)
 - `eval` now redirects instead of leaking lldb's C++ error when handed a Rust
   expression it can't resolve (a comparison `==`, tuple `.0`, `->`, method call): it
   says eval takes variable PATHS, points to `rdbg vars`, and notes that `codelldb` on
