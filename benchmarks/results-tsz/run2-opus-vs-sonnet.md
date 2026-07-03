@@ -67,3 +67,20 @@ bug*, not the model — reporting it as a fix failure would be misleading.
    burn launches debugging a missing diagnostic.
 4. **Blind fix-iteration.** 14–27 `cargo test` rebuilds on the thrash cases. `set --then
    continue` can validate a fix hypothesis live without recompiling — under-used.
+
+## SKILL iteration — killing the token waste (validated)
+
+After run 2, the SKILL gained a **triage** ("read first; debug only a runtime question
+in large code; skip cheap/missing-output bugs; keep launches few") and a **fix-discipline**
+rule ("fix once, don't churn; >2–3 edit→test cycles = guessing; validate live with
+`set`"). Re-running the two catastrophic-waste cells (WITH only, same isolation):
+
+| case | before | after | what changed in behavior |
+|---|---|---|---|
+| Opus contravariant (missing diag) | +192% (17 launches) | **+26%** (1 launch) | read to find the absent check instead of hunting |
+| Sonnet nominal (cheap to read) | +849% (18 edits, 5 launches) | **+53%** (10 edits, 0 launches) | didn't over-engage the debugger; stopped edit churn |
+
+The agent now spends the debugger only where it pays: both former blowups drop to small
+overhead, still fixed. (One run each — weak-model variance remains — but the pattern
+matches the intent: waste comes from hunting-launches and edit-churn, and the guidance
+suppresses both.)

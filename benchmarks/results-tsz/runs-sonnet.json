@@ -104,18 +104,6 @@
     "timed_out": false
   },
   {
-    "case": "1226c7c268",
-    "model": "sonnet",
-    "subject": "fix(solver,checker): relate same-class instantiations with identical-or-any type args (kysely $asScalar TS2416) (#13258)",
-    "cond": "with",
-    "baseline_red": true,
-    "passed": true,
-    "tokens": 18625199,
-    "wall_s": 1450.6,
-    "disk_killed": false,
-    "timed_out": false
-  },
-  {
     "case": "8292e69d5b",
     "model": "sonnet",
     "subject": "fix(checker): reject contravariant callback property in fresh object-l",
@@ -148,5 +136,17 @@
     "tokens": null,
     "wall_s": null,
     "note": "COMPROMISED \u2014 killed mid-run by codelldb ~20GB memory growth (tool bug), not a genuine result"
+  },
+  {
+    "case": "1226c7c268",
+    "model": "sonnet",
+    "subject": "fix(solver,checker): relate same-class instantiations with identical-or-any type args (kysely $asScalar TS2416) (#13258)",
+    "cond": "with",
+    "baseline_red": true,
+    "passed": true,
+    "tokens": 3353805,
+    "wall_s": 278.1,
+    "disk_killed": false,
+    "timed_out": false
   }
 ]
