@@ -42,8 +42,9 @@ esac
 command -v rust-analyzer >/dev/null 2>&1 || \
   echo "rdbg: also install rust-analyzer for navigation:  rustup component add rust-analyzer" >&2
 
-# codelldb — the debug adapter, auto-installed so `eval` gets full Rust expression
-# eval (comparisons `a == b`, tuple `x.0`, method calls), not just variable paths.
+# codelldb — the debug adapter, auto-installed so `eval` handles comparisons
+# (`a == b`), arithmetic (`a + b*2`), and tuple/field access (`p.0`), which plain
+# lldb-dap rejects. (Rust method calls still can't run — lldb has no Rust codegen.)
 # Kept in its own dir so it finds its bundled liblldb; rdbg finds it automatically.
 cl_home="$HOME/.local/share/rdbg/codelldb"
 if [ -n "${RDBG_NO_CODELLDB:-}" ]; then

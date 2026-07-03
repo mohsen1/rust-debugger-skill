@@ -167,9 +167,10 @@ that *changed* — `~ sum: u32 = 6 (was 3)`), **predicate run-to**
 (`rdbg continue --until 'sum > 100'` — rdbg re-checks the condition itself at
 each breakpoint stop, so it works past lldb's condition limits), **one-shot
 panic triage** (`rdbg debug --test t --panic` returns the panic message, the first
-*user* frame with its arguments, and locals in one bundle), and **full Rust
-expression eval** (`install.sh` auto-installs `codelldb`, so `eval` handles
-`a == b`, `x.0`, and method calls — not just variable paths).
+*user* frame with its arguments, and locals in one bundle), and **richer `eval`**
+(`install.sh` auto-installs `codelldb`, so `eval` handles comparisons `a == b`,
+arithmetic `a + b*2`, and tuple/field access `p.0` — not just variable paths;
+Rust method calls remain out of reach since lldb can't run Rust code).
 
 ## Build
 

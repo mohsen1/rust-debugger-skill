@@ -856,15 +856,23 @@ impl Session {
         let Some(f) = self.frame() else { return "(not stopped)".into() };
         let resp = self.dap.request_soft("evaluate", json!({"expression": expr, "frameId": f.id, "context": "hover"}), Duration::from_secs(15));
         if !resp["success"].as_bool().unwrap_or(false) {
-            // The fallback evaluator (lldb-dap) is C++-based and rejects Rust syntax —
-            // tuple `.0`, `.` on a pointer (wants `->`), `==`, method calls, expressions.
-            // Redirect the agent to what `eval` can do instead of leaking the C++ error.
-            let exp = expr.contains("==") || expr.contains("!=") || expr.contains("&&")
-                || expr.contains("||") || expr.contains('(') || expr.contains("->");
-            let hint = if exp {
-                "eval takes a variable PATH (e.g. `source.params[0].ty`), not an expression, comparison, or method call — break where the value is computed and inspect its inputs. Install `codelldb` on PATH for full Rust expression eval."
+            // The evaluate request failed. Tailor the hint to the active adapter:
+            // codelldb evaluates comparisons/arithmetic/field access but still cannot
+            // *call* a Rust method (lldb has no Rust codegen); plain lldb-dap's C++
+            // evaluator rejects Rust syntax outright. Either way, don't leak the raw error.
+            let is_call = expr.contains('(');
+            let is_expr = is_call || expr.contains("==") || expr.contains("!=")
+                || expr.contains("&&") || expr.contains("||") || expr.contains("->");
+            let hint = if self.adapter.contains("codelldb") {
+                if is_call {
+                    "codelldb/lldb can't call a Rust function or method (no Rust codegen in the evaluator) — break inside it, or eval its inputs instead."
+                } else {
+                    "not evaluable in this frame — check the path with `rdbg vars` (it may be a computed value or out of scope)."
+                }
+            } else if is_expr {
+                "eval takes a variable PATH (e.g. `source.params[0].ty`), not an expression here — break where the value is computed and inspect its inputs. codelldb (rdbg's install.sh sets it up) adds comparison/arithmetic/field-access eval (not method calls — lldb can't run Rust code)."
             } else {
-                "not a resolvable path in this frame — run `rdbg vars` to see what's in scope (it may be a computed value, not a local). `codelldb` on PATH adds full Rust expression eval."
+                "not a resolvable path in this frame — run `rdbg vars` to see what's in scope (it may be a computed value, not a local). codelldb adds comparison/arithmetic/field-access eval."
             };
             return format!("(cannot evaluate {expr:?}: {hint})");
         }
