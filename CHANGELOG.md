@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 - On launch, rdbg now loads debug symbols **lazily** (`settings set
   target.preload-symbols false`) instead of indexing them all up front. On a large repo
   (tsz: 1.7M lines) preloading can cost ~20 GB of RAM in the adapter; lazy loading keeps
