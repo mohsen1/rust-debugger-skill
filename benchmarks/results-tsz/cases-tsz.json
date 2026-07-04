@@ -60,21 +60,6 @@
     ]
   },
   {
-    "sha": "61ae5e52064d7c77def158b1ef61acd498d2b741",
-    "parent": "057951f6c191bad8d0c4f43f9d578efa80e6795f",
-    "subject": "fix(checker): unify flow-narrowing finalization and roll narrowing mar",
-    "test_files": [
-      "crates/tsz-checker/tests/flow_narrowing_finalization_tests.rs"
-    ],
-    "cargo_files_to_checkout": [
-      "crates/tsz-checker/Cargo.toml"
-    ],
-    "nextest_filter": "-p tsz-checker --test flow_narrowing_finalization_tests",
-    "test_stems": [
-      "flow_narrowing_finalization_tests"
-    ]
-  },
-  {
     "sha": "1226c7c2680c00e394cb15e3f83360ddbf88850a",
     "parent": "1f07b8a42ff810b0debae69002630c916849ae83",
     "subject": "fix(solver,checker): relate same-class instantiations with identical-or-any type args (kysely $asScalar TS2416) (#13258)",
@@ -102,6 +87,246 @@
     "nextest_filter": "-p tsz-checker --test self_referential_class_ctor_window_tests",
     "test_stems": [
       "self_referential_class_ctor_window_tests"
+    ]
+  },
+  {
+    "sha": "e2320f4e42a1a3fad64ea9c6a1289a37a574c712",
+    "parent": "e498e0f8a5510f9d483d6f8ccdf9e64a4ac415f0",
+    "subject": "fix(solver): substitute mapped binder with its generic constraint in mapped-inde",
+    "test_files": [
+      "crates/tsz-checker/tests/mapped_indexed_constraint_substitution_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test mapped_indexed_constraint_substitution_tests",
+    "test_stems": [
+      "mapped_indexed_constraint_substitution_tests"
+    ]
+  },
+  {
+    "sha": "0537606eb044ba30211a9dbb07539bdafb091b85",
+    "parent": "6846ab95c6a2edf685b265660987f19c150d180d",
+    "subject": "fix(checker): overload argument collection reads caller node types through an ov",
+    "test_files": [
+      "crates/tsz-checker/tests/overload_argument_flow_narrowing_visibility_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test overload_argument_flow_narrowing_visibility_tests",
+    "test_stems": [
+      "overload_argument_flow_narrowing_visibility_tests"
+    ]
+  },
+  {
+    "sha": "0f954750c7b79d96d5136a12bf6f045bfe904cdf",
+    "parent": "b4bee8902df507ea410329898a771acc939071a0",
+    "subject": "fix(checker,solver): converge type-param generation identity for type-level decl",
+    "test_files": [
+      "crates/tsz-checker/tests/implements_type_param_generation_identity_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test implements_type_param_generation_identity_tests",
+    "test_stems": [
+      "implements_type_param_generation_identity_tests"
+    ]
+  },
+  {
+    "sha": "68ea863f3eba138a6a63bf8084d5d7255defd891",
+    "parent": "aaffb6a7117194c5414ff5091b1a7930927272a2",
+    "subject": "fix(solver): defer mapped key-filters whose condition references a lazy applicat",
+    "test_files": [
+      "crates/tsz-checker/tests/cross_file_generic_interface_mapped_filter_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test cross_file_generic_interface_mapped_filter_tests",
+    "test_stems": [
+      "cross_file_generic_interface_mapped_filter_tests"
+    ]
+  },
+  {
+    "sha": "1acef2ba1ab0eabe304defb280ebee6df4931ad7",
+    "parent": "3e09a118129dc8a76d036899ad9b1c3ce7f2f7a6",
+    "subject": "fix(checker): resolve cross-file generic-alias call params for inference (#12938",
+    "test_files": [
+      "crates/tsz-checker/tests/cross_file_generic_alias_call_inference_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test cross_file_generic_alias_call_inference_tests",
+    "test_stems": [
+      "cross_file_generic_alias_call_inference_tests"
+    ]
+  },
+  {
+    "sha": "6e94f91c83a7a40ad53f27767b84632a60e05724",
+    "parent": "496181437bff45f44cd3d4732f2a0de33d289f4b",
+    "subject": "fix(solver): raise distributive-conditional union cap above real-world key space",
+    "test_files": [
+      "crates/tsz-checker/tests/large_union_conditional_distribution_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test large_union_conditional_distribution_tests",
+    "test_stems": [
+      "large_union_conditional_distribution_tests"
+    ]
+  },
+  {
+    "sha": "0f1a2942c333850d6f876d01b2bd8cc51e0dde6c",
+    "parent": "b458850ebba38dd5c47cf9977055801ba6a6ec34",
+    "subject": "fix(solver): infer union of source members to a single naked type variable in a ",
+    "test_files": [
+      "crates/tsz-checker/tests/union_target_inference_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test union_target_inference_tests",
+    "test_stems": [
+      "union_target_inference_tests"
+    ]
+  },
+  {
+    "sha": "296bf8c6d581ce9d0635b282682da0514fd14f39",
+    "parent": "cffd7fc89bd8123b890220d4089885d0adb9245c",
+    "subject": "fix(solver): assign a type parameter to a `Pick`-subset homomorphic mapped type ",
+    "test_files": [
+      "crates/tsz-checker/tests/type_param_pick_subset_assignability_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test type_param_pick_subset_assignability_tests",
+    "test_stems": [
+      "type_param_pick_subset_assignability_tests"
+    ]
+  },
+  {
+    "sha": "ed1c5b05c21f83a241cdaf050ef89fdf544379f8",
+    "parent": "aea340bb4b9d49e5f2bcb5c62079d566cdec82f9",
+    "subject": "fix(solver,checker): kysely one-shot bundle \u2014 predicate negative narrowing, succ",
+    "test_files": [
+      "crates/tsz-checker/tests/imported_ctor_alias_predicate_narrowing_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test imported_ctor_alias_predicate_narrowing_tests",
+    "test_stems": [
+      "imported_ctor_alias_predicate_narrowing_tests"
+    ]
+  },
+  {
+    "sha": "f908e5dd4387a365db8b7d2975d941a45df65aee",
+    "parent": "2cb5b4bbe18fe04fb94d76f1f5bbdad06503b9d5",
+    "subject": "fix(solver): union unmatched union-target constituents for naked inference (#128",
+    "test_files": [
+      "crates/tsz-checker/tests/recursive_array_utility_inference_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test recursive_array_utility_inference_tests",
+    "test_stems": [
+      "recursive_array_utility_inference_tests"
+    ]
+  },
+  {
+    "sha": "c2e8b63aeba7d9914b37f6ea613da08e310991b1",
+    "parent": "d4ad4b8f9d660ac7cd699f17e2df0f1f459f447f",
+    "subject": "fix(checker): terminate self-referential `typeof` alias bodies like tsc (#12177)",
+    "test_files": [
+      "crates/tsz-checker/tests/typeof_self_referential_alias_termination_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test typeof_self_referential_alias_termination_tests",
+    "test_stems": [
+      "typeof_self_referential_alias_termination_tests"
+    ]
+  },
+  {
+    "sha": "9e1fce29b810e95c280fdeafe5ef454fdb620697",
+    "parent": "de25aa7a5851d787e339ca97f963dcd9791a3856",
+    "subject": "fix(checker): report TS2687 for class member modifier disagreements (#11585) (#1",
+    "test_files": [
+      "crates/tsz-checker/tests/class_member_modifier_ts2687_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test class_member_modifier_ts2687_tests",
+    "test_stems": [
+      "class_member_modifier_ts2687_tests"
+    ]
+  },
+  {
+    "sha": "7d9f9cf0cae0624390c0d5b678985860810d8ba2",
+    "parent": "e77a09574996c0ef70d49a8c9dc02ce58d459858",
+    "subject": "fix(solver): expand conditional-bodied alias applications to any reduced shape i",
+    "test_files": [
+      "crates/tsz-checker/tests/conditional_application_display_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test conditional_application_display_tests",
+    "test_stems": [
+      "conditional_application_display_tests"
+    ]
+  },
+  {
+    "sha": "e77a09574996c0ef70d49a8c9dc02ce58d459858",
+    "parent": "48e8254cf4adce17e82939865d9f50771c58ee9d",
+    "subject": "fix(checker): stop identity mapped-alias applications from polluting argument di",
+    "test_files": [
+      "crates/tsz-checker/tests/mapped_identity_alias_display_pollution_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test mapped_identity_alias_display_pollution_tests",
+    "test_stems": [
+      "mapped_identity_alias_display_pollution_tests"
+    ]
+  },
+  {
+    "sha": "b01338524f33c97ddcd631aff675f8b2f43c1114",
+    "parent": "90536cddd4a596a32009d33598d3a7a5cb17cc02",
+    "subject": "fix(checker): report TS2687 for duplicate property modifier disagreements (#1158",
+    "test_files": [
+      "crates/tsz-checker/tests/duplicate_property_modifier_ts2687_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test duplicate_property_modifier_ts2687_tests",
+    "test_stems": [
+      "duplicate_property_modifier_ts2687_tests"
+    ]
+  },
+  {
+    "sha": "795b89e6b058e54a76e67d440713737530b6b70b",
+    "parent": "7e0605c1550da1e9127d2003c1008f7a4020a245",
+    "subject": "fix(checker): preserve literal members when contextually typing object literals ",
+    "test_files": [
+      "crates/tsz-checker/tests/object_literal_union_contextual_typing_tests.rs"
+    ],
+    "cargo_files_to_checkout": [
+      "crates/tsz-checker/Cargo.toml"
+    ],
+    "nextest_filter": "-p tsz-checker --test object_literal_union_contextual_typing_tests",
+    "test_stems": [
+      "object_literal_union_contextual_typing_tests"
     ]
   }
 ]

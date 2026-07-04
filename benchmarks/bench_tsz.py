@@ -233,7 +233,7 @@ def main():
     idxs = [int(x) for x in a.cases.split(",")]
     conds = a.conditions.split(",")
     slot = Path(a.image) / "slot"
-    results_path = RESULTS / f"runs-{a.model}.json"
+    results_path = RESULTS / f"runs-{a.model}-{a.slot}.json"
     lock = threading.Lock()
     for i in idxs:
         one_case(slot, a.image, cases[i], conds, results_path, lock, a.model)
