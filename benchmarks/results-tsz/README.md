@@ -1,71 +1,96 @@
-# tsz fix-rate benchmark — with vs without rdbg
+# tsz benchmark — with vs without rdbg
 
-Does giving a coding agent `rdbg` help it fix real bugs in a large codebase? This
-measures fix rate, tokens, and wall time on real merged bug-fixes in
-[tsz](../../../tsz) (a ~1.7M-line TypeScript type-checker in Rust), with the agent
-run twice per bug: once plain, once with `rdbg` + a fingerprint-trace recipe.
+Does giving a coding agent `rdbg` help it fix real bugs in a large codebase, without
+wasting tokens when it isn't needed? This measures fix rate and tokens on real merged
+bug-fixes in `tsz` (a ~1.7M-line TypeScript type-checker in Rust), running the agent
+twice per bug: once plain, once with `rdbg`.
 
-Harness: [`bench_tsz.py`](../bench_tsz.py). Raw per-run data:
-[`runs-final.json`](runs-final.json). Cases: [`cases-tsz.json`](cases-tsz.json).
+Harness: [`bench_tsz.py`](../bench_tsz.py). Detailed writeups:
+[`run2-opus-vs-sonnet.md`](run2-opus-vs-sonnet.md) (2 models, 6 cases) and
+[`run3-full-sweep.md`](run3-full-sweep.md) (22 cases + multi-trial — the current result).
 
 ## Method (contamination-isolated)
 
 - **Cases** are merged `fix(checker/solver)` PRs from **June 2026** — months past the
-  model's training cutoff — each adding a regression test. Chosen to span diagnostic
-  shapes: a wrong displayed value, a false-positive (extra) diagnostic, and a missing
-  diagnostic.
+  model's training cutoff — each adding a regression test, spanning diagnostic shapes
+  (wrong value, false-positive, missing, nominal-relation, subclass-ctor, …).
 - Each case is a **clean single-commit checkout at the fix's parent** with only the
   regression test overlaid: `git log`/`show`/`blame` reveal nothing about the fix, the
   fix commit isn't in the object store, and **`WebSearch`/`WebFetch` are disallowed** —
-  so the agent cannot look up the answer.
-- tsz's own `.claude` (its `tsz-tracing`/`tsz-emit` skills) is **stripped** so both
-  conditions are a plain agent; the WITH condition adds only `rdbg`.
-- Agent: **Opus, medium effort**. Fix = the crate's regression test passes
-  (`cargo nextest` exit 0). Each run is isolated in a capped disk image.
+  the agent cannot look up the answer.
+- tsz's own `.claude` is **stripped** so both conditions are a plain agent; the WITH
+  condition adds only `rdbg` + a short tsz pointer (the general skill carries the rest).
+- Fix = the crate's regression test passes (`cargo nextest` exit 0). Each run is isolated
+  in a capped disk image; the WITH condition uses codelldb.
 
-## Results (Opus, 3 cases)
+## Current headline (run 3 — 22 cases, Opus)
 
-| case | bug type | without rdbg | with rdbg | Δ tokens | fix |
-|---|---|---|---|---|---|
-| 4da902 | wrong display value | 8.83M / 811s | **4.47M / 498s** | **−49%** | ✓ / ✓ |
-| 06943a | false-positive (extra) | 22.9M / 1928s | **6.92M / 866s** | **−70%** | ✓ / ✓ |
-| 8292e69 | missing diagnostic | 5.51M / 769s | 10.5M / 1427s | **+91%** | ✓ / ✓ |
-| **total** | | 37.2M | 21.9M | **−41%** | **3/3 both** |
+| metric | value |
+|---|---|
+| clean with/without pairs | 16 (of 22; 4 not-red skips, 2 hard cases) |
+| aggregate tokens | 86.9M → 46.2M (**−47%**) |
+| median Δ | **−29%** |
+| fix rate | **32/32 (100%)** |
+| cells with *systematic* +100% waste | **none** |
 
-## Verdict (honest, not a blanket win)
+The debugger wins big where the bug is expensive to read (−85% at 26M→3.8M, and a spread
+of −30% to −82%) and is at most a small fixed overhead on cheap bugs.
 
-1. **Fix rate is identical (3/3 both).** `rdbg` does not change *whether* Opus fixes
-   these — only the cost.
-2. **`rdbg`'s value scales with how expensive the bug is to *read*.** On the two
-   hard-to-localize bugs (reading thrashed to 8.8M and 22.9M tokens), tracing to the
-   emit site cut cost **49% and 70%**. On the one bug reading localized cheaply (5.5M),
-   `rdbg` was net **overhead (+91%)**.
-3. **Bug type matters.** Wrong/extra diagnostics suit `rdbg` — break on the emit sink
-   and backtrace to the deciding code. A *missing* diagnostic has no emit to trace, so
-   the agent traces solver internals the long way; `rdbg` helps less and can cost more.
+## The finding that made it a product: a triage skill
 
-## The tool fix this depended on
+Earlier runs exposed *token waste* — the agent debugging when it shouldn't (17 launches
+hunting a missing diagnostic → **+192%**; 18 edits churning a fix → **+747%**). The fix
+was **not tsz-specific**: the SKILL now leads with a triage ("read first; launch only for
+a runtime question in code too large to read by eye; skip cheap/missing-output bugs; keep
+launches few") and a fix-discipline rule ("fix once, don't churn; validate live with
+`set`"). With it:
 
-Before a fix to `rdbg`, the *same* case-0 showed WITH costing **more** (9.19M vs 8.45M):
-`--break-fn push_diagnostic` exited **silently** for diagnostics that don't route
-through that sink, so the agent assumed the function "isn't called" and fell back to
-`eprintln` — the manual loop `rdbg` exists to replace. `rdbg` now reports, on program
-exit, which breakpoints **did not fire** (`NOT BOUND` vs `bound, 0 hits`). The winning
-transcripts show the agent reading `push_diagnostic — bound, 0 hits`, re-targeting to
-`emit_render_request`/other sites, hitting the real one, and fixing at half the cost.
-The −49%/−70% wins exist only because of that fix.
+| case | before (run 2) | after (run 3, single) | multi-trial median |
+|---|---|---|---|
+| contravariant (missing diag) | +192% | −82% | — |
+| nominal (fix-thrash) | +747% | +89% | **−39%** |
+| `b01338524f` (cheap) | — | +147% | **−5%** |
 
-## Caveats
+The apparent +100% single-run cells (`nominal`, `b01338524f`) are **variance, not waste**:
+multi-trialing them (4× per condition) gives median deltas of −39% and −5%. And rdbg
+*narrows* variance (nominal WITH spans 4.2–8.4M vs WITHOUT 4.2–16.2M) — grounding makes
+the agent more consistent, not just cheaper. So the skill's typical behavior never wastes.
 
-- **n = 3.** The pattern (big wins where reading thrashes, overhead where it doesn't)
-  matches the larger `rlenv` dataset, but three cases is three cases.
-- **Opus is the strongest reader**, so this is conservative — the wins came exactly on
-  the bugs where even Opus thrashed; a weaker (e.g. Sonnet-tier) agent pays a larger
-  reading tax and would likely benefit on more of them.
+## Why it works (unchanged thesis, now validated at scale)
+
+- **rdbg's value scales with how expensive the bug is to read**, times the model's
+  reading tax. Big wins where reading thrashes; ~neutral where it's cheap. On the same
+  contravariant bug, Opus (strong reader) got +192% overhead in run 2 while Sonnet
+  (thrashes unaided) got −92% — same bug, opposite by model.
+- **Bug-type fit.** Wrong/extra diagnostics → break on the emit sink and backtrace to the
+  deciding code (big wins). *Missing* diagnostics have no emit to trace → the skill now
+  says *read*, don't hunt (which flipped contravariant from +192% to a win).
+
+## Tool fixes this depended on
+
+- **Silent breakpoints** — `rdbg` now reports on exit which breakpoints did *not* fire
+  (`NOT BOUND` vs `bound, 0 hits`), so the agent re-targets instead of falling back to
+  `eprintln`.
+- **codelldb footprint** — `target.preload-symbols false` cut the adapter from ~20GB to
+  **636MB** on tsz (measured live); `PR_SET_PDEATHSIG` reaps it if the daemon is killed.
+  Without these the WITH condition OOM-spiralled on the big repo.
+- **Token metric** — a `claude -p` run can emit >1 `result` event; the harness now takes
+  the largest (main run), not the last.
+
+## Caveats (honest)
+
+- **Single-run variance is high** (the false-positive cell measured 3.4M–10.2M across
+  runs). The large effects and "no systematic waste" hold at n=1, but tight per-case
+  numbers need the multi-trial median — which is the correct measure here.
+- **16 clean of 22**: 4 cases were not-red-at-parent (invalid, skipped) and 2 are hard
+  for Opus regardless (`4aac` cost 17.6M unaided). A fully rigorous claim wants ~20 clean
+  cases × N trials with CIs.
 
 ## Reproduce
 
 ```sh
-# mine cases -> cases-tsz.json (see bench_tsz.py header), then, per slot + capped image:
-python3 bench_tsz.py --slot A --image /Volumes/tszA --cases 0,1,2
+# mine cases -> cases-tsz.json (see bench_tsz.py header), then per slot + capped image:
+python3 bench_tsz.py --slot A --image /Volumes/tszA --cases 0,1,2,3 --model opus
+# multi-trial one case (median beats single-run noise):
+python3 /path/to/multitrial.py <case_idx> 4 /Volumes/tszMT
 ```

@@ -8,12 +8,17 @@
   the footprint small at the price of a slightly slower first symbol lookup. Verified
   `--break-fn` (function breakpoints, which need a name→address lookup) still bind + hit.
 
-- SKILL now leads with a **"When to reach for it (and when not)"** triage: read first;
+- SKILL now leads with a **"When to reach for it (and when not)"** triage — read first;
   launch only for a *runtime* question in code too large to follow by eye; skip the
   debugger for small/localized bugs, **missing-output** bugs (nothing to trace), and
-  blind fix-iteration; keep launches few. This is the lever against token waste — on the
-  tsz benchmark it cut a missing-diagnostic case from **+192% tokens (17 exploratory
-  launches) to +26% (1 launch)**, still fixed. General (not repo-specific).
+  blind fix-iteration; keep launches few — plus a **fix-discipline** rule: fix once,
+  don't churn; more than ~2–3 edit→test cycles means guessing; validate a hypothesis live
+  with `set --then continue` instead of re-launching. Together these are the lever against
+  token waste. On the tsz 22-case sweep they eliminate the *systematic* waste: run-2's
+  blowups (a missing-diagnostic case at **+192%**, a fix-thrash case at **+747%**) become
+  wins (**−82%**, and a **−39% multi-trial median**), while the debugger's big wins on
+  hard-to-read bugs are preserved (−47% aggregate tokens, 100% fix rate). General, not
+  repo-specific.
 - The debug adapter now **dies with the daemon on Linux** (`PR_SET_PDEATHSIG`), even on
   the daemon's own SIGKILL/OOM/crash where no cleanup code runs. Prevents a ~20 GB
   codelldb (its symbol footprint on a large repo) from orphaning into a memory leak that
