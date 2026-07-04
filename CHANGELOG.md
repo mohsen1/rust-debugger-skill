@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- SKILL "tap, don't walk" rewritten into **hard, countable trip-wires** after Opus teammates
+  deep-read the worst rdbg-thrash runs in the tsz benchmark (28–92 rdbg calls / 7–10M tokens on
+  bugs a disciplined run fixes in ~2). Root cause: every anti-thrash rule already existed but as
+  *advisory prose* ("keep launches few", "the signature of losing runs") — models override
+  advice under momentum. The rules are now imperative and anchored to observable events:
+  **`bt` names a `file:line` → STOP** (read it; don't break into the callees it names); a
+  **2-launch budget** (`trace` counts — it rebuilds); **`0 hits`/`NOT BOUND` → read the gate,
+  don't re-guess** (a named wrong value is a `grep` task, not a debugger task); **`eval` can't
+  run methods → break inside / never `dbg!`/`eprintln!`**; **state only what the output shows**
+  (a raw test `FAILED`/exit-101 with no `>>> STOP` ≠ "the line didn't run" — confirm the
+  breakpoint is *bound* first); **degraded tooling → stop and read**. Targets the exact failure
+  modes (trace-hunting across sinks, chasing callees past the localizing backtrace,
+  instrumentation fallback at the method-call wall, and confabulating observations when stuck).
+
 - SKILL now teaches the **"tap, don't walk"** pattern, grounded in a study of 87 benchmark
   transcripts: the token wins come from breaking at the **sink** (where the wrong result
   surfaces), reading **which path fired / which breakpoints did *not* fire**, and then

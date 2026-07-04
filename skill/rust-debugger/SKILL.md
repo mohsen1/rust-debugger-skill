@@ -48,24 +48,41 @@ again. Better still, validate a fix hypothesis **without editing at all**: `set`
 suspect value and `continue` to watch the outcome change. More than ~2–3 edit→test
 cycles means you're guessing — go back to understanding.
 
-## Tap, don't walk
+## Tap, don't walk (hard rules)
 
-The debugger's job is to **aim your reading**, not to replay execution. The pattern that
-works: break at the **sink** — the point where the wrong result surfaces (the emit, the
-return, the failing assert) — read **which path fired and the deciding values right there**,
-then `bt` back to the code that decided it and **read that code** to find the fix. One or two
-launches, and then you're reading again.
+The debugger **aims your reading**; it rarely hands you the fix. The pattern that works: break
+at the **sink** — where the wrong result surfaces (the emit, the return, the failing assert) —
+read **which path fired and the deciding values there**, `bt` back to the code that decided it,
+and **read that code**. One or two launches, then you're reading.
 
-The single most useful signal is often which breakpoints **did *not* fire**. A *missing*
-output means the sink was never reached (rdbg reports `NOT BOUND` or `bound, 0 hits`) — so
-the bug is an upstream gate that wrongly accepted or returned early. Go read that gate; don't
-keep adding breakpoints hunting for code that never ran.
+Treat the rest as hard rules, not advice — every losing run in the benchmark broke one of these
+while sure it was "making progress":
 
-**The trap is walking execution.** Stepping instruction-by-instruction, `eval`-looping to
-reconstruct state by hand, or falling back to `dbg!`/`println!` instrumentation are the
-signature of runs that burn tokens and still lose. If you're stepping more than a short hop,
-or on your third `launch`, stop — read the code the backtrace pointed at instead. The
-debugger tells you *where* to read; it rarely hands you the fix.
+- **`bt` named a `file:line` → STOP; do not launch again.** Read that line. The fix is in that
+  frame or its **caller** — never break into a *callee* the backtrace names just to "confirm"
+  its return value; read the caller that decided to use it.
+- **Budget: 2 launches (a `trace` counts — it rebuilds the crate too).** Before a 3rd probe,
+  state in one sentence the exact runtime fact you still lack *and cannot get by reading*. If
+  you can't, you're done debugging — read.
+- **`0 hits` / `NOT BOUND` means the sink is elsewhere: READ, don't re-guess.** Grep the wrong
+  value / read the emit site to find the real `file:line`; do not relaunch at another guessed
+  location. Never use the debugger to *search* for where to break — a failing test that names
+  the wrong value (an error code, a message) is a grep task, not a debugger task.
+- **`eval` can't run Rust methods.** A `.len()`, a formatted type name, any method-computed
+  value will fail — break *inside* that method and read its inputs, or read the code. A failed
+  `eval` on an opaque `Arc`/`Box`/trait object is **not** a "flaky debugger." **Never add
+  `dbg!`/`eprintln!`/`println!`** — it rebuilds the crate and is the signature of every losing
+  run. Use `rdbg vars` to see *all* locals at one stop instead of re-launching to change
+  `--capture`.
+- **State only what the output shows.** Cite the exact command and the output line that proves
+  a claim, or say "unknown" — never assert an observation you can't quote. A test that just
+  `FAILED` / `exited code 101` with **no `>>> STOP` and no hit count** ran to completion
+  *without pausing* — it does **not** mean that line never ran; run `rdbg breaks` to confirm a
+  breakpoint is **bound** before trusting its silence.
+- **Degraded tooling → stop and read.** A DWARF/parse error, breakpoints that won't bind, or
+  values that won't `eval` mean the debugger can't answer on this build; relaunching won't make
+  it bind. Stepping instruction-by-instruction is walking execution — one short hop at most,
+  never to traverse a path.
 
 ## Start a session
 
