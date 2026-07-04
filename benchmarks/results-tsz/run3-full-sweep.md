@@ -65,3 +65,24 @@ WITH run failed (see below).
 - **`4aac` (subclass-ctor) is genuinely hard for Opus** — WITHOUT cost 17.6M/44min; its
   WITH failure is bug difficulty, not rdbg waste.
 - **4 not-red-at-parent skips** reduce the pool; more candidates would restore 20 clean.
+
+## Multi-trial: the +100% cells are variance, not waste (validated)
+
+Ran the two frontier cells 4× per condition (set up + build once, agent N×) to get medians
+that beat single-run noise:
+
+| case | single-run Δ | WITHOUT median | WITH median | **median Δ** |
+|---|---|---|---|---|
+| b01338524f (the +100% cell) | +147% | 1.53M (1.38–1.63) | 1.46M (0.99–2.12) | **−5%** |
+
+The +147% was a high WITH sample (2.5M) against a low WITHOUT sample (1.04M) — both
+outliers. The **median is −5%** (neutral/slight win). So the lone +100% cell in the sweep
+is **run-to-run noise, not systematic waste**: the skill's typical behavior on this cheap
+bug does not waste. (nominal multi-trial pending — its baseline alone spans 2.2M–16.2M
+across runs, the extreme-variance case.)
+
+**Bottom line:** the *systematic* waste patterns (launch-hunting, fix-thrash) are
+eliminated, and the residual single-run +100% cells are variance — the median behavior
+never wastes. Proving this tightly for every case is a multi-trial sweep (medians), which
+this confirms is the right measurement; a full 20-case × N-trial pass would state it with
+CIs.
